@@ -30,7 +30,6 @@ steps:
       - managed
       - '--allow-unauthenticated'
 
-# Add this options section
 options:
   logging: CLOUD_LOGGING_ONLY
 
