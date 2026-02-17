@@ -1,44 +1,7 @@
-# Build phase: Create Docker image
+# Cloud Build Configuration
+
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - build
-      - '-f'
-      - 'serviceworker/Dockerfile'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:$COMMIT_SHA'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:latest'
-      - 'serviceworker'
+    args: ['build', '-f', 'serviceworker/Dockerfile', 'serviceworker']
 
-  # Push phase: Upload image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args:
-      - push
-      - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:$COMMIT_SHA'
-
-  # Deploy phase: Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - $_SERVICE_NAME
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:$COMMIT_SHA'
-      - '--region'
-      - $_REGION
-      - '--platform'
-      - managed
-      - '--allow-unauthenticated'
-
-options:
-  logging: CLOUD_LOGGING_ONLY
-
-substitutions:
-  _SERVICE_NAME: 'serviceworker'
-  _REGION: 'us-central1'
-
-images:
-  - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:latest'
+;
