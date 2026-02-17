@@ -7,7 +7,9 @@ steps:
       - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:$COMMIT_SHA'
       - '-t'
       - 'gcr.io/$PROJECT_ID/$_SERVICE_NAME:latest'
-      - .
+      - '-f'
+      - 'serviceworker/Dockerfile'  # Add this line to specify Dockerfile path
+      - 'serviceworker'  # Changed from '.' to 'serviceworker'
 
   # Push phase: Upload image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
@@ -34,7 +36,7 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 substitutions:
-  _SERVICE_NAME: 'petwell-app'
+  _SERVICE_NAME: 'serviceworker'
   _REGION: 'us-central1'
 
 images:
