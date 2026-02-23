@@ -1,10 +1,10 @@
 import base64
 import json
-from flask import Flask, request, abort
+from flask import Blueprint, request, abort
 
-app = Flask(__name__)
+pubsub_bp = Blueprint("pubsub", __name__)
 
-@app.post("/pubsub/push")
+@pubsub_bp.post("/pubsub/push")
 def pubsub_push():
     envelope = request.get_json(silent=True)
     if not envelope or "message" not in envelope:
@@ -23,14 +23,13 @@ def pubsub_push():
 
     bucket = payload.get("bucket") or payload.get("bucketId")
     name = payload.get("name") or payload.get("objectId")
-    generation = payload.get("generation")  # useful for idempotency
+    generation = payload.get("generation")
     message_id = msg.get("messageId")
 
     if not bucket or not name:
         abort(400, f"Missing bucket/name in payload: {payload}")
 
-    # TODO: enqueue work (Cloud Tasks / PubSub) instead of heavy processing inline
+    # Keep this handler fast; enqueue real work elsewhere.
     print(f"Received: gs://{bucket}/{name} gen={generation} messageId={message_id}")
 
-    # Returning any 2xx ACKs the message
     return ("", 204)
