@@ -13,4 +13,4 @@ EXPOSE 8080
 # Set the PORT environment variable
 ENV PORT=8080
 
-CMD ["python", "app.py"]
+CMD ["gunicorn", "-b", ":8080", "app:app"]
