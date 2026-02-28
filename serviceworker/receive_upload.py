@@ -30,6 +30,6 @@ def pubsub_push():
         abort(400, f"Missing bucket/name in payload: {payload}")
 
     # Keep this handler fast; enqueue real work elsewhere.
-    print(f"Received: gs://{bucket}/{name} gen={generation} messageId={message_id}")
+    print(f"Received: gs://{bucket}/{name} gen={generation} messageId={message_id}", flush=True)
 
     return ("", 204)
