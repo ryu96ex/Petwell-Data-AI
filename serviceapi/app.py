@@ -30,6 +30,9 @@ def get_signed_url():
         file_name = data.get("fileName")
         content_type = data.get("contentType")
 
+        print(f"PetId: {pet_id}")
+        print(f"File Name: {file_name}")
+        print(f"Content Type: {content_type}")
 
         if not all([pet_id, file_name, content_type]):
             return jsonify({"error": "Missing required fields (petId, fileName, contentType)"}), 400
