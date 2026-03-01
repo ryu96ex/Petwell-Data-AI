@@ -12,6 +12,8 @@ CORS(app, origins=["http://localhost:5173"])
 def hello():
     return 'Hello from Petwell!'
 
+BUCKET_NAME = os.environ["BUCKET_NAME"]
+
 @app.route("/get-signed-url", methods=["POST"])
 def get_signed_url():
     try:
