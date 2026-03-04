@@ -65,5 +65,5 @@ def get_signed_url():
         return jsonify({"signedUrl": url, "gcsFilePath": blob_path}), 200
 
     except Exception:
-        logger.exception("Error generating signed URL")
+        logger.error("Error generating signed URL: %s", e)
         return jsonify({"error": "Internal server error"}), 500
