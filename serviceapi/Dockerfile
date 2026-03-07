@@ -13,4 +13,4 @@ EXPOSE 8080
 # Set the PORT environment variable
 ENV PORT=8080
 
-CMD ["gunicorn", "-b", ":8080", "app:app"]
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 1 --timeout 90 app:app 
