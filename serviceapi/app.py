@@ -29,7 +29,7 @@ def hello():
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 
-@app.route("/get-signed-url", methods=["POST"])
+@app.route("api/get-signed-url", methods=["POST"])
 def get_signed_url():
     try:
         auth_header = request.headers.get("Authorization")
