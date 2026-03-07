@@ -1,3 +1,4 @@
+
 import os
 import datetime
 import logging
@@ -10,6 +11,11 @@ import google.auth
 from google.auth import iam
 from google.auth.transport.requests import Request
 
+credentials, project_id = google.auth.default()
+# CRITICAL NEW STEP: Refresh the credentials to actually generate the token
+auth_request = google.auth.transport.requests.Request()
+credentials.refresh(auth_request)
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -19,7 +25,7 @@ CORS(app, origins=["http://localhost:5173"])
 
 @app.route('/')
 def hello():
-    return 'Hello from Petwell!'
+    return 'Petwell Service Api!'
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 
@@ -37,11 +43,13 @@ def get_signed_url():
         file_name = data.get("fileName")
         content_type = data.get("contentType")
 
-        logger.info("PetId=%s FileName=%s ContentType=%s", pet_id, file_name, content_type)
+        logger.info("***PetId=%s FileName=%s ContentType=%s", pet_id, file_name, content_type)
 
         if not all([pet_id, file_name, content_type]):
             return jsonify({"error": "Missing required fields (petId, fileName, contentType)"}), 400
 
+        logger.info("***Passed required field check")
+       
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
@@ -49,21 +57,22 @@ def get_signed_url():
         blob = bucket.blob(blob_path)
 
         # NEW: use IAM signer (no private key file needed)
-        credentials, project_id = google.auth.default()
-        signer = iam.Signer(Request(), credentials, credentials.service_account_email)
+            
+        #signer = iam.Signer(Request(), credentials, credentials.service_account_email)
 
         url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
             method="PUT",
             content_type=content_type,
-            credentials=credentials,
-            signer=signer,
             service_account_email=credentials.service_account_email,
+            access_token=credentials.token
         )
 
+        logger.info("***generated url: ", url)
+        #return url
         return jsonify({"signedUrl": url, "gcsFilePath": blob_path}), 200
 
     except Exception:
-        logger.error("Error generating signed URL: %s", e)
+        logger.exception("Error generating signed URL: %s", e)  
         return jsonify({"error": "Internal server error"}), 500
