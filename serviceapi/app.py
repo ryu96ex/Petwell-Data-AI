@@ -9,7 +9,7 @@ from google.cloud import storage
 import google.auth
 import google.auth.transport.requests
 
-import sqlachemy
+import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
 
 logger = logging.getLogger(__name__)
