@@ -33,6 +33,38 @@ def get_credentials():
     return _cached_credentials
 
 
+#DB connection pool
+# --- 1. CLOUD SQL DATABASE SETUP ---
+def init_connection_pool() -> sqlalchemy.engine.Engine:
+    # We will pass these via Cloud Run Environment Variables later!
+    instance_connection_name = os.environ.get("DB_INSTANCE_CONNECTION_NAME")
+    db_user = os.environ.get("DB_USER")
+    db_pass = os.environ.get("DB_PASS")
+    db_name = os.environ.get("DB_NAME")
+
+    connector = Connector()
+
+    def getconn():
+        return connector.connect(
+            instance_connection_name,
+            "pg8000",
+            user=db_user,
+            password=db_pass,
+            db=db_name,
+            ip_type=IPTypes.PUBLIC  # Uses Google's secure IAM tunnel
+        )
+
+    # Create a connection pool to reuse database connections
+    return sqlalchemy.create_engine(
+        "postgresql+pg8000://",
+        creator=getconn,
+        pool_size=1,
+        max_overflow=1,
+    )
+
+db_pool = init_connection_pool()
+
+
 @app.route("/")
 def hello():
     return "Petwell Service Api!"
@@ -84,6 +116,30 @@ def get_signed_url():
         )
 
         logger.info("***generated url: %s", url)
+
+        print ("debug: before db insert")
+         # --- STEP B: SAVE TO POSTGRES ---
+            # Extract pet_id from the file path (e.g., 'medical_records/pet_1/RyanPhoto.jpg' -> 'pet_1')
+           # pet_id = file_name.split("/")[1]
+           
+        with db_pool.connect() as db_conn:
+            # Prepare the SQL Insert
+            insert_stmt = sqlalchemy.text("""
+                INSERT INTO medical_records (id, pet_id, blob_path, status)
+                VALUES ("record1", "Gup1", "xxxpath", "new")
+            """)
+           
+            # Execute it safely using parameterized variables
+            db_conn.execute(insert_stmt, parameters={
+                "id": "record1",
+                "pet_id": "Gup1",
+                "blob_path": "xxxpath",
+                "status": "new" # Postgres loves JSON strings for lists
+            })
+            db_conn.commit()
+           
+        print("Successfully saved AI summary to Cloud SQL!")
+        
         return jsonify({"signedUrl": url, "gcsFilePath": blob_path}), 200
 
     except Exception as e:
