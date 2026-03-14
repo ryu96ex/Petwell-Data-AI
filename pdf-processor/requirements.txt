@@ -1,0 +1,9 @@
+Flask==2.3.2
+google-cloud-storage==2.10.0
+pandas==2.0.3
+gunicorn==21.2.0
+vertexai==1.46.0
+cloud-sql-python-connector~=1.0
+pg8000==1.30.3
+SQLAlchemy==2.0.25
+google-cloud-tasks==2.16.0
