@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from google.cloud import tasks_v2
 from google.api_core import exceptions as gcp_exceptions
 
