@@ -9,8 +9,36 @@ from fastapi import FastAPI, HTTPException, Request
 from google.cloud import tasks_v2
 from google.api_core import exceptions as gcp_exceptions
 
-logger = logging.getLogger(__name__)
+import logging
+
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@app.exception_handler(HTTPException)
+async def log_http_exception(request: Request, exc: HTTPException):
+    if 400 <= exc.status_code < 500:
+        logger.warning(
+            "HTTPException %s %s -> %s (%s)",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            exc.detail,
+        )
+    else:
+        logger.error(
+            "HTTPException %s %s -> %s (%s)",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            exc.detail,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def log_unhandled_exception(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 app = FastAPI()
 
