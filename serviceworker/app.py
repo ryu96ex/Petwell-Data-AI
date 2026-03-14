@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import hashlib
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -44,19 +45,6 @@ async def log_unhandled_exception(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-
-
-# Expected: pets/{pet_id}/records/{record_id}.pdf
-_RECORD_PATH_RE = re.compile(r"^pets\/[^\/]+\/records\/([0-9a-fA-F-]{36})\.pdf$")
-
-
-def parse_record_id(blob_path: str) -> str:
-    m = _RECORD_PATH_RE.match(blob_path)
-    if not m:
-        raise HTTPException(status_code=400, detail=f"Unexpected blob_path format: {blob_path}")
-    return m.group(1)
-
-
 def enqueue_task(*, record_id: str, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     location = os.environ["TASKS_LOCATION"]
@@ -68,7 +56,6 @@ def enqueue_task(*, record_id: str, bucket: str, blob_path: str, generation: Opt
     parent = client.queue_path(project, location, queue)
 
     task_payload = {
-        "record_id": record_id,
         "bucket": bucket,
         "blob_path": blob_path,
         "generation": generation,
@@ -91,9 +78,13 @@ def enqueue_task(*, record_id: str, bucket: str, blob_path: str, generation: Opt
         }
 
     # Idempotent enqueue: deterministic task name
-    task_id = f"process-{record_id}"
-    task["name"] = client.task_path(project, location, queue, task_id)
+    # Build a job key string using bucket + name + generation and hash it to a short safe ID:
 
+    job_key = f"{bucket}/{blob_path}#{generation or ''}"
+    task_hash = hashlib.sha256(job_key.encode("utf-8")).hexdigest()[:32]
+    task_id = f"process-{task_hash}"
+    task["name"] = client.task_path(project, location, queue, task_id)
+    
     created = client.create_task(request={"parent": parent, "task": task})
     return created.name
 
@@ -129,19 +120,14 @@ async def pubsub_push(request: Request):
 
     logger.info("Received: gs://%s/%s gen=%s messageId=%s", bucket, blob_path, generation, message_id)
 
-    record_id = parse_record_id(blob_path)
-
     try:
         task_name = enqueue_task(
-            record_id=record_id,
             bucket=bucket,
             blob_path=blob_path,
             generation=generation,
             pubsub_message_id=message_id,
         )
         logger.info("Enqueued task: %s", task_name)
-    except gcp_exceptions.AlreadyExists:
-        logger.info("Task already exists for record_id=%s (duplicate Pub/Sub). Acking.", record_id)
     except Exception as e:
         logger.exception("Failed to enqueue Cloud Task: %s", e)
         raise HTTPException(status_code=500, detail="Failed to enqueue Cloud Task")
@@ -152,12 +138,11 @@ async def pubsub_push(request: Request):
 
 @app.post("/tasks/process")
 async def tasks_process(payload: dict):
-    record_id = payload.get("record_id")
     bucket = payload.get("bucket")
     blob_path = payload.get("blob_path")
-    if not record_id or not bucket or not blob_path:
-        raise HTTPException(status_code=400, detail=f"Missing record_id/bucket/blob_path: {payload}")
+    if not bucket or not blob_path:
+        raise HTTPException(status_code=400, detail=f"Missing bucket/blob_path: {payload}")
 
     # TODO: implement OCR + Vertex + DB updates
-    logger.info("Processing record_id=%s gs://%s/%s", record_id, bucket, blob_path)
+
     return {}
