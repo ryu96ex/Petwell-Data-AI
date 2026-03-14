@@ -2,7 +2,6 @@ Flask==2.3.2
 Flask-Cors==4.0.0
 google-cloud-storage>=2.14.0
 google-auth>=2.0.0
-google-cloud-tasks
 gunicorn==21.2.0
 cloud-sql-python-connector~=1.0
 pg8000==1.30.3
