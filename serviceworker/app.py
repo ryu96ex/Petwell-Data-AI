@@ -48,6 +48,36 @@ async def log_unhandled_exception(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
+def init_connection_pool() -> sqlalchemy.engine.Engine:
+    instance_connection_name = os.environ.get("DB_INSTANCE_CONNECTION_NAME")
+    db_user = os.environ.get("DB_USER")
+    db_pass = os.environ.get("DB_PASS")
+    db_name = os.environ.get("DB_NAME")
+
+    if not all([instance_connection_name, db_user, db_pass, db_name]):
+        logger.warning("DB env vars missing; db_pool will still init but may fail at runtime.")
+
+    connector = Connector()
+
+    def getconn():
+        return connector.connect(
+            instance_connection_name,
+            "pg8000",
+            user=db_user,
+            password=db_pass,
+            db=db_name,
+            ip_type=IPTypes.PUBLIC,
+        )
+
+    return sqlalchemy.create_engine(
+        "postgresql+pg8000://",
+        creator=getconn,
+        pool_size=1,
+        max_overflow=1,
+    )
+
+
+db_pool = init_connection_pool()
 
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
