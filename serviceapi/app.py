@@ -120,12 +120,8 @@ def hello():
 
 @app.post("/api/get-signed-url")
 def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Header(default=None)):
-    # Step 1: Auth header presence (you can replace with Firebase verification later)
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
-
-    # NOTE: token currently unused; keeping in case you validate it later.
-    _token = authorization.split("Bearer ")[1]
 
     pet_id = payload.petId
     file_name = payload.fileName
@@ -150,8 +146,8 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         access_token=credentials.token,
     )
 
-    # Your DB insert block currently inserts a hard-coded user; preserving behavior but fixing indentation.
-    # You will likely replace this with real inserts later.
+    # Currently inserts a hard-coded user
+    # Replace this with real inserts later.
     try:
         with db_pool.connect() as db_conn:
             insert_stmt = sqlalchemy.text(
@@ -164,7 +160,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
             db_conn.commit()
     except Exception as e:
         logger.exception("DB insert failed: %s", e)
-        # Decide if you want to fail the request or proceed. For now, fail loudly:
+
         raise HTTPException(status_code=500, detail="DB insert failed")
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
