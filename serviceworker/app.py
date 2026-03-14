@@ -14,6 +14,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app = FastAPI()
+
 @app.exception_handler(HTTPException)
 async def log_http_exception(request: Request, exc: HTTPException):
     if 400 <= exc.status_code < 500:
@@ -40,7 +42,8 @@ async def log_unhandled_exception(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
-app = FastAPI()
+
+
 
 # Expected: pets/{pet_id}/records/{record_id}.pdf
 _RECORD_PATH_RE = re.compile(r"^pets\/[^\/]+\/records\/([0-9a-fA-F-]{36})\.pdf$")
