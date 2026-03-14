@@ -21,6 +21,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+app = FastAPI()
+
 @app.exception_handler(HTTPException)
 async def log_http_exception(request: Request, exc: HTTPException):
     # 4xx are expected client errors; 5xx are server errors
@@ -42,13 +44,11 @@ async def log_http_exception(request: Request, exc: HTTPException):
         )
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-
 @app.exception_handler(Exception)
 async def log_unhandled_exception(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
-app = FastAPI()
 
 # CORS (same behavior as your Flask version)
 app.add_middleware(
