@@ -10,6 +10,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.cloud import tasks_v2
 from google.api_core import exceptions as gcp_exceptions
+from google.cloud.sql.connector import Connector, IPTypes
+
+import sqlalchemy
+
 
 import logging
 
