@@ -45,7 +45,7 @@ async def log_unhandled_exception(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-def enqueue_task(*, record_id: str, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
+def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     location = os.environ["TASKS_LOCATION"]
     queue = os.environ["TASKS_QUEUE"]
