@@ -10,13 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Expose port 8080
 EXPOSE 8080
-
-# Set the PORT environment variable
 ENV PORT=8080
 
-# Recycle worker periodically to mitigate memory growth / fragmentation.
 CMD exec gunicorn \
   --bind :$PORT \
   --workers 1 \
@@ -26,4 +22,5 @@ CMD exec gunicorn \
   --max-requests-jitter 50 \
   --access-logfile - \
   --error-logfile - \
+  -k uvicorn.workers.UvicornWorker \
   app:app
