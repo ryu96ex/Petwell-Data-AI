@@ -53,7 +53,7 @@ async def log_unhandled_exception(request: Request, exc: Exception):
 # CORS (same behavior as your Flask version)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:8081"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
