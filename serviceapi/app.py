@@ -160,8 +160,6 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
             db_conn.execute(insert_stmt, {
                 "uid": 'ryandyu',
                 "email": 'ryandyu@njit.edu'
-                "
-                
             })
             db_conn.commit()
     except Exception as e:
