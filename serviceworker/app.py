@@ -87,6 +87,23 @@ def if_pdf_path(blob_path: str) -> bool:
     # worker only handles pdf uploads
     return blob_path.endswith(".pdf")
 
+def _extract_text_with_pdf_reader(
+    *,
+    bucket: str,
+    blob_path: str,
+    generation: Optional[str] = None,
+) -> str:
+    # First-pass extraction for text-based PDFs (fast, no OCR cost).
+    storage_client = storage.Client()
+    blob = storage_client.bucket(bucket).blob(blob_path, generation=generation)
+    file_bytes = blob.download_as_bytes()
+
+    reader = PdfReader(io.BytesIO(file_bytes))
+    page_text_chunks = []
+    for page in reader.pages:
+        page_text_chunks.append(page.extract_text() or "")
+    return "\n".join(page_text_chunks).strip()
+
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     location = os.environ["TASKS_LOCATION"]
@@ -193,5 +210,13 @@ async def tasks_process(payload: dict):
         return {"status": "skipped", "reason": "non_pdf"}
 
     logger.info("Processing PDF: gs://%s/%s gen=%s", bucket, blob_path, generation)
+
+    try:
+        # Attempt parser-based extraction first; OCR only when text is insufficient.
+        parsed_text = _extract_text_with_pdf_reader(bucket=bucket, blob_path=blob_path, generation=generation)
+        extraction_mode = "pdf_parser"
+
+    # TODO: OCR if needed
+
 
     return {}
