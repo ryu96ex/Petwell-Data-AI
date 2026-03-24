@@ -245,6 +245,8 @@ async def pubsub_push(request: Request):
 async def tasks_process(payload: dict):
     bucket = payload.get("bucket")
     blob_path = payload.get("blob_path")
+    generation = payload.get("generation")
+    pubsub_message_id = payload.get("pubsub_message_id") or "unknown"
     if not bucket or not blob_path:
         raise HTTPException(status_code=400, detail=f"Missing bucket/blob_path: {payload}")
 
