@@ -148,19 +148,25 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     # Currently inserts a hard-coded user
     # Replace this with real inserts later.
-    # try:
-    #     with db_pool.connect() as db_conn:
-    #         insert_stmt = sqlalchemy.text(
-    #             """
-    #             INSERT INTO app_user (id, firebase_uid, email, created_at)
-    #             VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com', NOW())
-    #             """
-    #         )
-    #         db_conn.execute(insert_stmt)
-    #         db_conn.commit()
-    # except Exception as e:
-    #     logger.exception("DB insert failed: %s", e)        
-    #     raise HTTPException(status_code=500, detail="DB insert failed")
+    try:
+        with db_pool.connect() as db_conn:
+            insert_stmt = sqlalchemy.text(
+                """
+                INSERT INTO app_user (id, firebase_uid, email, created_at)
+                VALUES (gen_random_uuid(), :uid, :email, NOW())
+                ON CONFLICT (firebase_uid) DO NOTHING
+                """
+            )
+            db_conn.execute(insert_stmt, {
+                "uid": 'ryandyu',
+                "email": 'ryandyu@njit.edu'
+                "
+                
+            })
+            db_conn.commit()
+    except Exception as e:
+        logger.exception("DB insert failed: %s", e)        
+        raise HTTPException(status_code=500, detail="DB insert failed")
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
