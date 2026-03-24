@@ -104,6 +104,11 @@ def _extract_text_with_pdf_reader(
         page_text_chunks.append(page.extract_text() or "")
     return "\n".join(page_text_chunks).strip()
 
+def _needs_ocr(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    # Heuristic: scanned/image PDFs typically return near empty text from pypdf.
+    return len(compact) < 100
+
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     location = os.environ["TASKS_LOCATION"]
@@ -216,7 +221,13 @@ async def tasks_process(payload: dict):
         parsed_text = _extract_text_with_pdf_reader(bucket=bucket, blob_path=blob_path, generation=generation)
         extraction_mode = "pdf_parser"
 
-    # TODO: OCR if needed
-
+        # Run OCR if needed
+        if _needs_ocr(parsed_text):
+            logger.info("PDF parser yielded insufficient text; running OCR for gs://%s/%s", bucket, blob_path,)
+            task_id = hashlib.sha256(f"{bucket}/{blob_path}#{generation or ''}".encode("utf-8")).hexdigest()[:32]
+            parsed_text = _extract_text_with_vision_ocr(bucket=bucket, blob_path=blob_path, task_id=task_id)
+            extraction_mode = "ocr"
+        
+        # TODO: fail if both parser and OCR produce no valid data
 
     return {}
