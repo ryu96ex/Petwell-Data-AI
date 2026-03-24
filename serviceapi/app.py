@@ -164,7 +164,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
-@app.get("/get-pet-trends"){
+@app.get("/get-pet-trends")
 def get_pet_trends():
     # In the future, this will query your Cloud SQL Postgres DB
     # For now, we return a successful mock response to stop the error
@@ -184,4 +184,3 @@ def get_pet_trends():
         "trends": mock_trends
     }), 200
 
-}
