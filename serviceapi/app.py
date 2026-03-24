@@ -148,19 +148,40 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     # Currently inserts a hard-coded user
     # Replace this with real inserts later.
-    try:
-        with db_pool.connect() as db_conn:
-            insert_stmt = sqlalchemy.text(
-                """
-                INSERT INTO app_user (id, firebase_uid, email, created_at)
-                VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com', NOW())
-                """
-            )
-            db_conn.execute(insert_stmt)
-            db_conn.commit()
-    except Exception as e:
-        logger.exception("DB insert failed: %s", e)
-
-        raise HTTPException(status_code=500, detail="DB insert failed")
+    # try:
+    #     with db_pool.connect() as db_conn:
+    #         insert_stmt = sqlalchemy.text(
+    #             """
+    #             INSERT INTO app_user (id, firebase_uid, email, created_at)
+    #             VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com', NOW())
+    #             """
+    #         )
+    #         db_conn.execute(insert_stmt)
+    #         db_conn.commit()
+    # except Exception as e:
+    #     logger.exception("DB insert failed: %s", e)        
+    #     raise HTTPException(status_code=500, detail="DB insert failed")
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
+
+@app.get("/get-pet-trends"){
+def get_pet_trends():
+    # In the future, this will query your Cloud SQL Postgres DB
+    # For now, we return a successful mock response to stop the error
+    pet_id = request.args.get("petId")
+    
+    # Example data structure expected by the LineChart
+    mock_trends = [
+        {"value": 10, "label": "Jan"},
+        {"value": 25, "label": "Feb"},
+        {"value": 18, "label": "Mar"},
+        {"value": 30, "label": "Apr"},
+        {"value": 45, "label": "May"}
+    ]
+    
+    return jsonify({
+        "petId": pet_id,
+        "trends": mock_trends
+    }), 200
+
+}
