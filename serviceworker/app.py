@@ -109,6 +109,47 @@ def _needs_ocr(text: str) -> bool:
     # Heuristic: scanned/image PDFs typically return near empty text from pypdf.
     return len(compact) < 100
 
+def _extract_text_with_vision_ocr(*, bucket: str, blob_path: str, task_id: str) -> str:
+    # Fallback path for scanned/image PDFs using Vision async file OCR.
+    vision_client = vision.ImageAnnotatorClient()
+    storage_client = storage.Client()
+
+    input_uri = f"gs://{bucket}/{blob_path}"
+    output_bucket = os.environ.get("OCR_OUTPUT_BUCKET", bucket)
+    output_prefix = os.environ.get("OCR_OUTPUT_PREFIX", "ocr-output").strip("/")
+    # Use task scoped prefix so OCR output files are isolated per document
+    destination_uri = f"gs://{output_bucket}/{output_prefix}/{task_id}/"
+
+    request = vision.AsyncAnnotateFileRequest(
+        features=[vision.Feature(type_=vision.Feature.Type.DOCUMENT_TEXT_DETECTION)],
+        input_config=vision.InputConfig(gcs_source=vision.GcsSource(uri=input_uri), mime_type="application/pdf"),
+        output_config=vision.OutputConfig(
+            gcs_destination=vision.GcsDestination(uri=destination_uri),
+            batch_size=5,
+        ),
+    )
+
+    operation = vision_client.async_batch_annotate_files(requests=[request])
+    # Wait for asynchronous OCR to complete before collecting output JSON files
+    operation.result(timeout=600)
+
+    destination_path = destination_uri.replace("gs://", "", 1)
+    output_bucket_name, _, prefix = destination_path.partition("/")
+
+    ocr_text_parts = []
+    for result_blob in storage_client.list_blobs(output_bucket_name, prefix=prefix):
+        if not result_blob.name.endswith(".json"):
+            continue
+        # Vision writes one or more JSON shards
+        # Concatenate text from all responses
+        payload = json.loads(result_blob.download_as_bytes())
+        for response_group in payload.get("responses", []):
+            full_text = response_group.get("fullTextAnnotation", {}).get("text", "")
+            if full_text:
+                ocr_text_parts.append(full_text)
+
+    return "\n".join(ocr_text_parts).strip()
+
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     location = os.environ["TASKS_LOCATION"]
@@ -228,6 +269,22 @@ async def tasks_process(payload: dict):
             parsed_text = _extract_text_with_vision_ocr(bucket=bucket, blob_path=blob_path, task_id=task_id)
             extraction_mode = "ocr"
         
-        # TODO: fail if both parser and OCR produce no valid data
+        # Fail explicitly when both parser and OCR produce no usable text
+        if not parsed_text:
+            raise HTTPException(status_code=422, detail="Failed to extract text from PDF")
 
-    return {}
+        logger.info(
+            "Text extraction complete mode=%s chars=%s messageId=%s",
+            extraction_mode,
+            len(parsed_text),
+            pubsub_message_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("PDF processing failed for gs://%s/%s: %s", bucket, blob_path, e)
+        raise HTTPException(status_code=500, detail="PDF processing failed")
+
+    # TODO: implement AI JSON structuring + DB updates with extracted text.
+
+    return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
