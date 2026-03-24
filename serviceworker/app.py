@@ -187,4 +187,11 @@ async def tasks_process(payload: dict):
 
     # TODO: implement OCR + Vertex + DB updates
 
+    # Ignore non-PDF files routed from the same storage notification pipeline.
+    if not _is_pdf_path(blob_path):
+        logger.info("Skipping non-PDF object: gs://%s/%s", bucket, blob_path)
+        return {"status": "skipped", "reason": "non_pdf"}
+
+    logger.info("Processing PDF: gs://%s/%s gen=%s", bucket, blob_path, generation)
+
     return {}
