@@ -4,13 +4,17 @@ import logging
 import os
 import re
 import hashlib
+import io
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from google.cloud import tasks_v2
+from google.cloud import storage
+from google.cloud import vision
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud.sql.connector import Connector, IPTypes
+from pypdf import PdfReader
 
 import sqlalchemy
 
@@ -78,6 +82,10 @@ def init_connection_pool() -> sqlalchemy.engine.Engine:
 
 
 db_pool = init_connection_pool()
+
+def if_pdf_path(blob_path: str) -> bool:
+    # worker only handles pdf uploads
+    return blob_path.endswith(".pdf")
 
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
