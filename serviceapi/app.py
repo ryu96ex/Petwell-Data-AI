@@ -10,21 +10,23 @@ from pydantic import BaseModel
 
 from google.cloud import storage
 
+#fire base auth needed for user identity authentication
 import firebase_admin
 from firebase_admin import auth, credentials
 
-# import google.auth
-# import google.auth.transport.requests
+#google auth needed for google cloud service account authentication
+import google.auth
+import google.auth.transport.requests
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
 
 import logging
 
+firebase_admin.initialize_app()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-default_app = firebase_admin.initialize_app()
 
 app = FastAPI()
 
