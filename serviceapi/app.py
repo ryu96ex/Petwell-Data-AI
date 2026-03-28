@@ -126,7 +126,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
 
-    token = authorization.split("Bearer ")[1])
+    token = authorization.split("Bearer ")[1]
 
     try:
         decoded_token = auth.verify_id_token(token)
