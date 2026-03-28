@@ -132,6 +132,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         decoded_token = auth.verify_id_token(token)
         uid = decoded_token.get('uid')
         email = decoded_token.get('email')
+        logger.info("***Uid=%s Email%s", uid, email)
     exception Exception as e:
         logger.error("Token verification failed: %s", e)
         return jsonify({"error": "Invalid token"}), 401
