@@ -137,7 +137,8 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         logger.info("***Uid=%s Email%s", uid, email)
     except Exception as e:
         logger.error("Token verification failed: %s", e)
-        return jsonify({"error": "Invalid token"}), 401
+        JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return JSONResponse({"error": "Invalid token"}), 401
     
     
     pet_id = payload.petId
