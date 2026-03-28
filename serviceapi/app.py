@@ -10,8 +10,11 @@ from pydantic import BaseModel
 
 from google.cloud import storage
 
-import google.auth
-import google.auth.transport.requests
+import firebase_admin
+from firebase_admin import auth, credentials
+
+# import google.auth
+# import google.auth.transport.requests
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
@@ -123,6 +126,17 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
 
+    token = authorization.split("Bearer ")[1])
+
+    try:
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+        email = decoded_token.get('email')
+    exception Exception as e:
+        logger.error("Token verification failed: %s", e)
+        return jsonify({"error": "Invalid token"}), 401
+    
+    
     pet_id = payload.petId
     file_name = payload.fileName
     content_type = payload.contentType
@@ -158,8 +172,8 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
                 """
             )
             db_conn.execute(insert_stmt, {
-                "uid": 'ryandyu',
-                "email": 'ryandyu@njit.edu'
+                "uid": uid,
+                "email": email
             })
             db_conn.commit()
     except Exception as e:
