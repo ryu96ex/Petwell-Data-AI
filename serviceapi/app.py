@@ -24,6 +24,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+default_app = firebase_admin.initialize_app()
+
 app = FastAPI()
 
 @app.exception_handler(HTTPException)
