@@ -81,7 +81,20 @@ def init_connection_pool() -> sqlalchemy.engine.Engine:
     )
 
 
-db_pool = init_connection_pool()
+# db_pool = init_connection_pool()
+
+db_pool = None
+
+if all([
+    os.environ.get("DB_INSTANCE_CONNECTION_NAME"),
+    os.environ.get("DB_USER"),
+    os.environ.get("DB_PASS"),
+    os.environ.get("DB_NAME"),
+]):
+    db_pool = init_connection_pool()
+else:
+    logger.warning("Database not configured; starting without db_pool.")
+
 
 def if_pdf_path(blob_path: str) -> bool:
     # worker only handles pdf uploads
