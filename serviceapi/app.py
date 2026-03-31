@@ -5,6 +5,7 @@ import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from google.cloud import storage
+from dotenv import load_dotenv
 
 import google.auth
 import google.auth.transport.requests
@@ -18,11 +19,11 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
 
-BUCKET_NAME = os.environ["BUCKET_NAME"]
+load_dotenv()
 
-# Lazily initialize credentials to avoid extra work/memory at import time.
+BUCKET_NAME = os.getenv("PETWELL_BUCKET_NAME")
+
 _cached_credentials = None
-
 
 def get_credentials():
     global _cached_credentials
@@ -126,13 +127,11 @@ def get_signed_url():
            # pet_id = file_name.split("/")[1]
            
         with db_pool.connect() as db_conn:
-            # Prepare the SQL Insert
             insert_stmt = sqlalchemy.text("""
                 INSERT INTO app_user (id, firebase_uid, email)
                 VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com')
             """)
            
-            # Execute it safely using parameterized variables
             db_conn.execute(insert_stmt)
             db_conn.commit()
            
@@ -142,4 +141,40 @@ def get_signed_url():
 
     except Exception as e:
         logger.exception("Error generating signed URL: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+
+#get a user's ID and pet's ID from the request, validate the user exists in the database, and return a success message if both are valid.
+@app.route("/api/get-user-and-pet-ID", methods=["POST"])
+def get_user_and_pet():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        user_id = data.get("userId")
+        pet_id = data.get("petId")
+
+        if not user_id or not pet_id:
+            return jsonify({"error": "Missing userId or petId"}), 400
+
+        logger.info("Received userId=%s, petId=%s", user_id, pet_id)
+
+        with db_pool.connect() as conn:
+            query = sqlalchemy.text("""
+                SELECT 1
+                FROM app_user
+                WHERE firebase_uid = :user_id
+                LIMIT 1
+            """)
+            result = conn.execute(query, {"user_id": user_id}).fetchone()
+
+            if not result:
+                return jsonify({"error": "User not found"}), 404
+
+        return jsonify({
+            "message": "User and Pet validated successfully",
+            "userId": user_id,
+            "petId": pet_id
+        }), 200
+
+    except Exception as e:
+        logger.exception("Error validating user and pet: %s", e)
         return jsonify({"error": "Internal server error"}), 500
