@@ -1,50 +1,55 @@
 import os
 import datetime
 import logging
+from typing import Optional
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, Header, HTTPException,Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
 from google.cloud import storage
-from dotenv import load_dotenv
 
+#google auth needed for google cloud service account authentication
 import google.auth
 import google.auth.transport.requests
 
 import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
 
-logger = logging.getLogger(__name__)
+import logging
+
+firebase_admin.initialize_app()
+
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
 
-load_dotenv()
+BUCKET_NAME = os.environ["BUCKET_NAME"]
 
-BUCKET_NAME = os.getenv("PETWELL_BUCKET_NAME")
-
+# Lazily initialize credentials to avoid extra work/memory at import time.
 _cached_credentials = None
 
 def get_credentials():
+    """Refresh ADC credentials and cache them (used for signed URL token signing)."""
     global _cached_credentials
-
     if _cached_credentials is None or not _cached_credentials.valid:
         credentials, _project_id = google.auth.default()
         auth_request = google.auth.transport.requests.Request()
         credentials.refresh(auth_request)
         _cached_credentials = credentials
-
     return _cached_credentials
 
 
-#DB connection pool
-# --- 1. CLOUD SQL DATABASE SETUP ---
 def init_connection_pool() -> sqlalchemy.engine.Engine:
-    # We will pass these via Cloud Run Environment Variables later!
     instance_connection_name = os.environ.get("DB_INSTANCE_CONNECTION_NAME")
     db_user = os.environ.get("DB_USER")
     db_pass = os.environ.get("DB_PASS")
     db_name = os.environ.get("DB_NAME")
+
+    if not all([instance_connection_name, db_user, db_pass, db_name]):
+        logger.warning("DB env vars missing; db_pool will still init but may fail at runtime.")
 
     connector = Connector()
 
@@ -55,10 +60,9 @@ def init_connection_pool() -> sqlalchemy.engine.Engine:
             user=db_user,
             password=db_pass,
             db=db_name,
-            ip_type=IPTypes.PUBLIC  # Uses Google's secure IAM tunnel
+            ip_type=IPTypes.PUBLIC,
         )
 
-    # Create a connection pool to reuse database connections
     return sqlalchemy.create_engine(
         "postgresql+pg8000://",
         creator=getconn,
@@ -66,72 +70,72 @@ def init_connection_pool() -> sqlalchemy.engine.Engine:
         max_overflow=1,
     )
 
+
 db_pool = init_connection_pool()
 
 
-@app.route("/")
+class SignedUrlRequest(BaseModel):
+    petId: str
+    fileName: str
+    contentType: str
+
+
+@app.get("/")
 def hello():
     return "Petwell Service Api!"
 
 
-@app.route("/api/get-signed-url", methods=["POST"])
-def get_signed_url():
+@app.post("/api/get-signed-url")
+def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
+
+    token = authorization.split("Bearer ")[1]
+
     try:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Unauthorized: Missing or invalid token"}), 401
+        decoded_token = auth.verify_id_token(token)
+        uid = decoded_token.get('uid')
+        email = decoded_token.get('email')
+        logger.info("***Uid=%s Email%s", uid, email)
+    except Exception as e:
+        logger.error("Token verification failed: %s", e)
+        return JSONResponse({"error": "Invalid token"}), 401
+    
+    
+    pet_id = payload.petId
+    file_name = payload.fileName
+    content_type = payload.contentType
 
-        # NOTE: token currently unused; keeping line in case you validate it later.
-        _token = auth_header.split("Bearer ")[1]
+    logger.info("***PetId=%s FileName=%s ContentType=%s", pet_id, file_name, content_type)
 
-        data = request.get_json(silent=True) or {}
-        pet_id = data.get("petId")
-        file_name = data.get("fileName")
-        content_type = data.get("contentType")
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
 
-        logger.info(
-            "***PetId=%s FileName=%s ContentType=%s",
-            pet_id,
-            file_name,
-            content_type,
-        )
+    blob_path = f"medical_records/{pet_id}/{file_name}"
+    blob = bucket.blob(blob_path)
 
-        if not all([pet_id, file_name, content_type]):
-            return (
-                jsonify({"error": "Missing required fields (petId, fileName, contentType)"}),
-                400,
-            )
+    credentials = get_credentials()
 
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(BUCKET_NAME)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(minutes=15),
+        method="PUT",
+        content_type=content_type,
+        service_account_email=getattr(credentials, "service_account_email", None),
+        access_token=credentials.token,
+    )
 
-        blob_path = f"medical_records/{pet_id}/{file_name}"
-        blob = bucket.blob(blob_path)
-
-        credentials = get_credentials()
-
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=datetime.timedelta(minutes=15),
-            method="PUT",
-            content_type=content_type,
-            service_account_email=credentials.service_account_email,
-            access_token=credentials.token,
-        )
-
-        logger.info("***generated url: %s", url)
-
-        print ("debug: before db insert")
-         # --- STEP B: SAVE TO POSTGRES ---
-            # Extract pet_id from the file path (e.g., 'medical_records/pet_1/RyanPhoto.jpg' -> 'pet_1')
-           # pet_id = file_name.split("/")[1]
-           
+    # Currently inserts a hard-coded user
+    # Replace this with real inserts later.
+    try:
         with db_pool.connect() as db_conn:
+            # Prepare the SQL Insert
             insert_stmt = sqlalchemy.text("""
                 INSERT INTO app_user (id, firebase_uid, email)
                 VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com')
             """)
            
+            # Execute it safely using parameterized variables
             db_conn.execute(insert_stmt)
             db_conn.commit()
            
@@ -141,40 +145,4 @@ def get_signed_url():
 
     except Exception as e:
         logger.exception("Error generating signed URL: %s", e)
-        return jsonify({"error": "Internal server error"}), 500
-
-#get a user's ID and pet's ID from the request, validate the user exists in the database, and return a success message if both are valid.
-@app.route("/api/get-user-and-pet-ID", methods=["POST"])
-def get_user_and_pet():
-    try:
-        data = request.get_json(silent=True) or {}
-
-        user_id = data.get("userId")
-        pet_id = data.get("petId")
-
-        if not user_id or not pet_id:
-            return jsonify({"error": "Missing userId or petId"}), 400
-
-        logger.info("Received userId=%s, petId=%s", user_id, pet_id)
-
-        with db_pool.connect() as conn:
-            query = sqlalchemy.text("""
-                SELECT 1
-                FROM app_user
-                WHERE firebase_uid = :user_id
-                LIMIT 1
-            """)
-            result = conn.execute(query, {"user_id": user_id}).fetchone()
-
-            if not result:
-                return jsonify({"error": "User not found"}), 404
-
-        return jsonify({
-            "message": "User and Pet validated successfully",
-            "userId": user_id,
-            "petId": pet_id
-        }), 200
-
-    except Exception as e:
-        logger.exception("Error validating user and pet: %s", e)
         return jsonify({"error": "Internal server error"}), 500
