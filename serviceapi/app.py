@@ -3,12 +3,17 @@ import datetime
 import logging
 from typing import Optional
 
+from flask import Flask, request, jsonify
 from fastapi import FastAPI, Header, HTTPException,Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from google.cloud import storage
+
+#fire base auth needed for user identity authentication
+import firebase_admin
+from firebase_admin import auth, credentials
 
 #google auth needed for google cloud service account authentication
 import google.auth
@@ -22,14 +27,50 @@ import logging
 firebase_admin.initialize_app()
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173"])
+app = FastAPI()
+
+@app.exception_handler(HTTPException)
+async def log_http_exception(request: Request, exc: HTTPException):
+    # 4xx are expected client errors; 5xx are server errors
+    if 400 <= exc.status_code < 500:
+        logger.warning(
+            "HTTPException %s %s -> %s (%s)",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            exc.detail,
+        )
+    else:
+        logger.error(
+            "HTTPException %s %s -> %s (%s)",
+            request.method,
+            request.url.path,
+            exc.status_code,
+            exc.detail,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+@app.exception_handler(Exception)
+async def log_unhandled_exception(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+# CORS (same behavior as your Flask version)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8081"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 
-# Lazily initialize credentials to avoid extra work/memory at import time.
 _cached_credentials = None
+
 
 def get_credentials():
     """Refresh ADC credentials and cache them (used for signed URL token signing)."""
@@ -78,6 +119,15 @@ class SignedUrlRequest(BaseModel):
     petId: str
     fileName: str
     contentType: str
+
+class UserPetRequest(BaseModel):
+    userId: str
+    petId: str
+
+class CreateUserPetRequest(BaseModel):
+    userId: str
+    petName: str
+    petId: str
 
 
 @app.get("/")
@@ -129,20 +179,115 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     # Replace this with real inserts later.
     try:
         with db_pool.connect() as db_conn:
-            # Prepare the SQL Insert
-            insert_stmt = sqlalchemy.text("""
-                INSERT INTO app_user (id, firebase_uid, email)
-                VALUES (gen_random_uuid(), 'ryanyu', 'ryandyu@gmail.com')
-            """)
-           
-            # Execute it safely using parameterized variables
-            db_conn.execute(insert_stmt)
+            insert_stmt = sqlalchemy.text(
+                """
+                INSERT INTO app_user (id, firebase_uid, email, created_at)
+                VALUES (gen_random_uuid(), :uid, :email, NOW())
+                ON CONFLICT (firebase_uid) DO NOTHING
+                """
+            )
+            db_conn.execute(insert_stmt, {
+                "uid": uid,
+                "email": email
+            })
             db_conn.commit()
-           
-        print("Successfully saved AI summary to Cloud SQL!")
-        
-        return jsonify({"signedUrl": url, "gcsFilePath": blob_path}), 200
+    except Exception as e:
+        logger.exception("DB insert failed: %s", e)        
+        raise HTTPException(status_code=500, detail="DB insert failed")
+
+    return {"signedUrl": url, "gcsFilePath": blob_path}
+
+
+
+#get a user's ID and pet's ID from the request, validate the user exists in the database, and return a success message if both are valid.
+@app.post("/api/get-user-and-pet-ID")
+def get_user_and_pet(payload: UserPetRequest):
+    try:
+        user_id = payload.userId
+        pet_id = payload.petId
+
+        logger.info("Received userId=%s, petId=%s", user_id, pet_id)
+
+        with db_pool.connect() as conn:
+
+            #Checks if user already exists
+            user_query = sqlalchemy.text("""
+                SELECT 1 FROM app_user
+                WHERE firebase_uid = :user_id
+                LIMIT 1
+            """)
+            user_result = conn.execute(user_query, {"user_id": user_id}).fetchone()
+
+            if not user_result:
+                raise HTTPException(status_code=404, detail="User not found")
+
+            #Check pet exists (if you have a pets table)
+            pet_query = sqlalchemy.text("""
+                SELECT 1 FROM pet
+                WHERE id = :pet_id AND user_id = :user_id
+                LIMIT 1
+            """)
+            pet_result = conn.execute(pet_query, {
+                "pet_id": pet_id,
+                "user_id": user_id
+            }).fetchone()
+
+            if not pet_result:
+                raise HTTPException(status_code=404, detail="Pet not found")
+
+        return {
+            "message": "User and Pet validated successfully",
+            "userId": user_id,
+            "petId": pet_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error validating user and pet: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+
+@app.post("/api/create-user-and-pet")
+def create_user_and_pet(payload: CreateUserPetRequest):
+    try:
+        user_id = payload.userId
+        email = payload.email
+        pet_id = payload.petId
+
+        with db_pool.connect() as conn:
+            # Insert user if not exists
+            insert_user = sqlalchemy.text("""
+                INSERT INTO app_user (id, firebase_uid, email, created_at)
+                VALUES (gen_random_uuid(), :user_id, :email, NOW())
+                ON CONFLICT (firebase_uid) DO NOTHING
+            """)
+
+            conn.execute(insert_user, {
+                "user_id": user_id,
+                "email": email
+            })
+
+            # Insert pet if not exists
+            insert_pet = sqlalchemy.text("""
+                INSERT INTO pet (id, user_id, created_at)
+                VALUES (:pet_id, :user_id, NOW())
+                ON CONFLICT (id) DO NOTHING
+            """)
+
+            conn.execute(insert_pet, {
+                "pet_id": pet_id,
+                "user_id": user_id
+            })
+
+            conn.commit()
+
+        return {
+            "message": "User and Pet created successfully",
+            "userId": user_id,
+            "petId": pet_id
+        }
 
     except Exception as e:
-        logger.exception("Error generating signed URL: %s", e)
-        return jsonify({"error": "Internal server error"}), 500
+        logger.exception("Error creating user and pet: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to create user and pet")
