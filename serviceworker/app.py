@@ -305,9 +305,5 @@ async def tasks_process(payload: dict):
 
     # TODO: implement AI JSON structuring + DB updates with extracted text.
 
-    #return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}    
+    return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}    
 
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content={"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)},
-    )
