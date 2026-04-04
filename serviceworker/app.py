@@ -291,6 +291,7 @@ async def tasks_process(payload: dict):
         logger.info(
             "Text extraction complete mode=%s chars=%s messageId=%s",
             extraction_mode,
+            parsed_text,
             len(parsed_text),
             pubsub_message_id,
         )
@@ -302,4 +303,6 @@ async def tasks_process(payload: dict):
 
     # TODO: implement AI JSON structuring + DB updates with extracted text.
 
-    return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
+    #return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
+    # return a success message and 200 status 
+    return jsonify({"status": "success", "message": "Task completed"}), 200
