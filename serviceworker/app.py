@@ -15,6 +15,8 @@ from google.cloud import vision
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud.sql.connector import Connector, IPTypes
 from pypdf import PdfReader
+from fastapi import status
+
 
 import sqlalchemy
 
@@ -303,6 +305,9 @@ async def tasks_process(payload: dict):
 
     # TODO: implement AI JSON structuring + DB updates with extracted text.
 
-    #return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
-    # return a success message and 200 status 
-    raise HTTPException(status_code=200, detail="PDF processing success")
+    #return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}    
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)},
+    )
