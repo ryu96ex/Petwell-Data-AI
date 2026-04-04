@@ -305,4 +305,4 @@ async def tasks_process(payload: dict):
 
     #return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
     # return a success message and 200 status 
-    return jsonify({"status": "success", "message": "Task completed"}), 200
+    return JSONResponse(status_code=200, content={"processed"})
