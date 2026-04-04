@@ -289,7 +289,7 @@ async def tasks_process(payload: dict):
             raise HTTPException(status_code=422, detail="Failed to extract text from PDF")
 
         logger.info(
-            "Text extraction complete mode=%s chars=%s messageId=%s",
+            "Text extraction complete mode=%s text=%s chars=%s messageId=%s",
             extraction_mode,
             parsed_text,
             len(parsed_text),
