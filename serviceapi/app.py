@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException,Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi import Depends, Query
 from pydantic import BaseModel
 
 from google.cloud import storage
@@ -70,6 +71,22 @@ BUCKET_NAME = os.environ["BUCKET_NAME"]
 
 _cached_credentials = None
 
+def verify_firebase_uid(authorization: Optional[str] = Header(default=None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
+
+    token = authorization.split("Bearer ", 1)[1].strip()
+
+    try:
+        decoded_token = auth.verify_id_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    uid = decoded_token.get("uid")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid token: uid missing")
+
+    return uid
 
 def get_credentials():
     """Refresh ADC credentials and cache them (used for signed URL token signing)."""
@@ -187,57 +204,44 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
-@app.route("/get-pet-trends", methods=["GET", "OPTIONS"])
-@verify_firebase_token # Now secured to match the frontend auth
-def get_pet_trends():
-    if request.method == "OPTIONS":
-        return jsonify({"status": "ok"}), 200
-
-    pet_id = request.args.get("petId")
-    metric = request.args.get("metric", "ALT")
-
-    if not pet_id:
-        return jsonify({"error": "petId is required"}), 400
-
+@app.get("/get-pet-trends")
+def get_pet_trends(
+    petId: str = Query(...),
+    metric: str = Query("ALT"),
+    uid: str = Depends(verify_firebase_uid),
+):
     try:
-        # Using the SQLAlchemy engine to execute the query
-        with engine.connect() as conn:
-            query = text("""
+        with db_pool.connect() as conn:
+            query = sqlalchemy.text("""
                 SELECT lr.measured_date, lr.value_num
                 FROM lab_results lr
                 JOIN medical_records mr ON lr.record_id = mr.id
                 JOIN pets p ON mr.pet_id = p.id
                 JOIN app_user u ON p.user_id = u.id
                 WHERE p.id = :pet_id
-                AND u.firebase_uid = :firebase_uid
-                AND lr.metric_code = :metric
+                  AND u.firebase_uid = :firebase_uid
+                  AND lr.metric_code = :metric
                 ORDER BY lr.measured_date ASC
             """)
 
-            result = conn.execute(query, {
-                "pet_id": pet_id,
+            rows = conn.execute(query, {
+                "pet_id": petId,
                 "metric": metric,
-                "firebase_uid": request.user["uid"],
-            })
-            rows = result.fetchall()
-       
+                "firebase_uid": uid,
+            }).fetchall()
+
         trends = [
             {
                 "value": float(row[1]),
-                "label": row[0].strftime('%b %d') if isinstance(row[0], datetime.date) else str(row[0])
-            } for row in rows
+                "label": row[0].strftime("%b %d") if isinstance(row[0], datetime.date) else str(row[0]),
+            }
+            for row in rows
         ]
-       
-        return jsonify({
-            "petId": pet_id,
-            "metric": metric,
-            "trends": trends,
-            "verified_uid": request.user['uid']
-        }), 200
+
+        return {"petId": petId, "metric": metric, "trends": trends, "verified_uid": uid}
 
     except Exception as e:
-        print(f"DB Fetch Error: {str(e)}")
-        traceback.print_exc()
-        return jsonify({"error": "Could not fetch medical trends"}), 500
+        logger.exception("DB Fetch Error: %s", e)
+        raise HTTPException(status_code=500, detail="Could not fetch medical trends")
 
 
