@@ -132,7 +132,7 @@ db_pool = init_connection_pool()
 
 
 class SignedUrlRequest(BaseModel):
-    petId: str
+    petName: str
     fileName: str
     contentType: str
 
@@ -159,16 +159,16 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         return JSONResponse({"error": "Invalid token"}), 401
     
     
-    pet_id = payload.petId
+    pet_name = payload.petName
     file_name = payload.fileName
     content_type = payload.contentType
 
-    logger.info("***PetId=%s FileName=%s ContentType=%s", pet_id, file_name, content_type)
+    logger.info("***PetName=%s FileName=%s ContentType=%s", pet_name, file_name, content_type)
 
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
-    blob_path = f"medical_records/{pet_id}/{file_name}"
+    blob_path = f"medical_records/{pet_name}/{file_name}"
     blob = bucket.blob(blob_path)
 
     credentials = get_credentials()
