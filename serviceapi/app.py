@@ -206,7 +206,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
-    petId: str = Query(...),
+    petName: str = Query(...),
     metric: str = Query("ALT"),
     uid: str = Depends(verify_firebase_uid),
 ):
@@ -218,14 +218,14 @@ def get_pet_trends(
                 JOIN medical_records mr ON lr.record_id = mr.id
                 JOIN pets p ON mr.pet_id = p.id
                 JOIN app_user u ON p.user_id = u.id
-                WHERE p.id = :pet_id
+                WHERE p.name = :pet_name
                   AND u.firebase_uid = :firebase_uid
                   AND lr.metric_code = :metric
                 ORDER BY lr.measured_date ASC
             """)
 
             rows = conn.execute(query, {
-                "pet_id": petId,
+                "pet_name": petName,
                 "metric": metric,
                 "firebase_uid": uid,
             }).fetchall()
@@ -238,7 +238,7 @@ def get_pet_trends(
             for row in rows
         ]
 
-        return {"petId": petId, "metric": metric, "trends": trends, "verified_uid": uid}
+        return {"petName": petNamed, "metric": metric, "trends": trends, "verified_uid": uid}
 
     except Exception as e:
         logger.exception("DB Fetch Error: %s", e)
