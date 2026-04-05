@@ -204,7 +204,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
-@app.get("/get-pet-trends")
+@app.get("/api/get-pet-trends")
 def get_pet_trends(
     petId: str = Query(...),
     metric: str = Query("ALT"),
