@@ -238,7 +238,7 @@ def get_pet_trends(
             for row in rows
         ]
 
-        return {"petName": petNamed, "metric": metric, "trends": trends, "verified_uid": uid}
+        return {"petName": petName, "metric": metric, "trends": trends, "verified_uid": uid}
 
     except Exception as e:
         logger.exception("DB Fetch Error: %s", e)
