@@ -187,4 +187,57 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
+@app.route("/get-pet-trends", methods=["GET", "OPTIONS"])
+@verify_firebase_token # Now secured to match the frontend auth
+def get_pet_trends():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
+    pet_id = request.args.get("petId")
+    metric = request.args.get("metric", "ALT")
+
+    if not pet_id:
+        return jsonify({"error": "petId is required"}), 400
+
+    try:
+        # Using the SQLAlchemy engine to execute the query
+        with engine.connect() as conn:
+            query = text("""
+                SELECT lr.measured_date, lr.value_num
+                FROM lab_results lr
+                JOIN medical_records mr ON lr.record_id = mr.id
+                JOIN pets p ON mr.pet_id = p.id
+                JOIN app_user u ON p.user_id = u.id
+                WHERE p.id = :pet_id
+                AND u.firebase_uid = :firebase_uid
+                AND lr.metric_code = :metric
+                ORDER BY lr.measured_date ASC
+            """)
+
+            result = conn.execute(query, {
+                "pet_id": pet_id,
+                "metric": metric,
+                "firebase_uid": request.user["uid"],
+            })
+            rows = result.fetchall()
+       
+        trends = [
+            {
+                "value": float(row[1]),
+                "label": row[0].strftime('%b %d') if isinstance(row[0], datetime.date) else str(row[0])
+            } for row in rows
+        ]
+       
+        return jsonify({
+            "petId": pet_id,
+            "metric": metric,
+            "trends": trends,
+            "verified_uid": request.user['uid']
+        }), 200
+
+    except Exception as e:
+        print(f"DB Fetch Error: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": "Could not fetch medical trends"}), 500
+
 
