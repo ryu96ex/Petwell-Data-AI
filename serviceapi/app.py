@@ -129,6 +129,13 @@ class CreateUserPetRequest(BaseModel):
     petName: str
     petId: str
 
+class HealthRecordRequest(BaseModel): 
+    userId: str
+    petId: str
+    filepath: str
+    filename: str
+    contentType: str
+
 
 @app.get("/")
 def hello():
@@ -248,6 +255,7 @@ def get_user_and_pet(payload: UserPetRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
     
 
+#creates a user and pet record in the database if they don't already exist
 @app.post("/api/create-user-and-pet")
 def create_user_and_pet(payload: CreateUserPetRequest):
     try:
@@ -291,3 +299,29 @@ def create_user_and_pet(payload: CreateUserPetRequest):
     except Exception as e:
         logger.exception("Error creating user and pet: %s", e)
         raise HTTPException(status_code=500, detail="Failed to create user and pet")
+    
+
+@app.post("/api/upload-health-record")
+def upload_health_record(payload: HealthRecordRequest):
+    try:
+        user_id = payload.userId
+        pet_id = payload.petId
+        filepath = payload.filepath
+        filename = payload.filename
+        content_type = payload.contentType
+
+        # Here you would add logic to validate the user and pet, and then process the health record upload.
+        # This is a placeholder for demonstration purposes.
+
+        return {
+            "message": "Health record uploaded successfully",
+            "userId": user_id,
+            "petId": pet_id,
+            "filePath": filepath,
+            "fileName": filename,
+            "contentType": content_type
+        }
+
+    except Exception as e:
+        logger.exception("Error uploading health record: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to upload health record")
