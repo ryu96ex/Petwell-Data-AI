@@ -300,7 +300,7 @@ def create_user_and_pet(payload: CreateUserPetRequest):
         logger.exception("Error creating user and pet: %s", e)
         raise HTTPException(status_code=500, detail="Failed to create user and pet")
     
-
+#processes health record uploads
 @app.post("/api/upload-health-record")
 def upload_health_record(payload: HealthRecordRequest):
     try:
