@@ -208,7 +208,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
-def insert_meta_data(uid: str, email: str):
+def insert_meta_data(uid: str, email: str, petName: str):
 
     #use test value for email until the client app is enabled to pass email from firebase auth
 
