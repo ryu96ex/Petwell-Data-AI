@@ -249,7 +249,7 @@ def insert_meta_data(uid: str, email: str, petName: str):
                 user_id = user_row[0]
             else:
                 # Try to insert. If it conflicts, DO NOTHING and RETURNING yields no rows.
-                inserted = db_conn.execute(
+                user_id = db_conn.execute(
                     sqlalchemy.text(
                         """
                         INSERT INTO app_user (id, firebase_uid, email, created_at)
