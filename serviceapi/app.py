@@ -1,6 +1,7 @@
 import os
 import datetime
 import logging
+import uuid
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException,Request
@@ -165,10 +166,11 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     logger.info("***PetName=%s FileName=%s ContentType=%s", pet_name, file_name, content_type)
 
+    record_id = str(uuid.uuid4())
+    blob_path = f"medical_records/{uid}/{pet_name}/{record_id}/{file_name}"
+
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
-
-    blob_path = f"medical_records/{uid}/{pet_name}/{file_name}"
     blob = bucket.blob(blob_path)
 
     credentials = get_credentials()
@@ -183,9 +185,9 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     )
 
     #check for existing owner and insert new record if they do not exist
-    insert_meta_data(uid, email, pet_name)
+    result = insert_meta_data(uid, email, pet_name, blob_path, record_id)
 
-    return {"signedUrl": url, "gcsFilePath": blob_path}
+    return {"signedUrl": url, "gcsFilePath": blob_path, "medicalRecordId": result["medical_record_id"]}
 
 def get_or_create_app_user_id(db_conn, uid: Optional[str], email: Optional[str]):
     """
@@ -271,14 +273,38 @@ def get_or_create_pet_id(db_conn, user_id, petName: str):
     ).fetchone()[0]
 
 
-def insert_meta_data(uid: str, email: str, petName: str):
+def insert_medical_record_metadata(db_conn, pet_id, blob_path: str, record_id: str):
+    """
+    Insert a new row into medical_records.
+    Uses a caller-generated UUID as the primary key.
+    created_at, updated_at, visit_date, and error are left to DB defaults.
+    Returns: the inserted record UUID.
+    """
+    db_conn.execute(
+        sqlalchemy.text(
+            """
+            INSERT INTO medical_records (id, pet_id, blob_path, status)
+            VALUES (:id, :pet_id, :blob_path, :status)
+            """
+        ),
+        {
+            "id": record_id,
+            "pet_id": pet_id,
+            "blob_path": blob_path,
+            "status": "beginning processing",
+        },
+    )
+    return record_id
+
+
+def insert_meta_data(uid: str, email: str, petName: str, blob_path: str, record_id: str):
     try:
         with db_pool.connect() as db_conn:
             user_id = get_or_create_app_user_id(db_conn, uid=uid, email=email)
             pet_id = get_or_create_pet_id(db_conn, user_id=user_id, petName=petName)
+            insert_medical_record_metadata(db_conn, pet_id=pet_id, blob_path=blob_path, record_id=record_id)
             db_conn.commit()
-
-        return {"user_id": str(user_id), "pet_id": str(pet_id)}
+            return {"user_id": str(user_id), "pet_id": str(pet_id), "medical_record_id": record_id, "blob_path": blob_path}
 
     except HTTPException:
         raise
