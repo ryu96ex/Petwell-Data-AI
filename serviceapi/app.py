@@ -221,25 +221,29 @@ def insert_meta_data(uid: str, email: str, petName: str):
         with db_pool.connect() as db_conn:
             #Check if firebase user id or email already exists in the app_user table
             if uid: 
-                db_conn.execute(
+                select_stmt = sqlalchemy.text(
                     """
                     SELECT id
                     from app_user
                     where firebase_uid = %s
                     LIMIT 1
-                    """,
-                    (uid,),
+                    """
                 )
+                db_conn.execute(select_stmt, {
+                    "firebase_uid" : uid
+                })
             else:
-                db_conn.execute(
+                select_stmt = sqlalchemy.text(
                     """
                     SELECT id
                     from app_user
                     where email = %s
                     LIMIT 1
-                    """,
-                    (email,),
+                    """
                 )
+                db_conn.execute(select_stmt, {
+                    "email" : email
+                })
 
             row = db_conn.fetchone()
 
@@ -263,15 +267,20 @@ def insert_meta_data(uid: str, email: str, petName: str):
                 user_id = db_conn.fetchone()[0]
 
             #Check if pet with corresponding owner's user_id exists
-            db_conn.execute(
+            
+            select_stmt = sqlalchemy.text(
                 """
                 SELECT id
                 FROM pets
                 WHERE user_id = %s AND name = %s
                 LIMIT 1
-                """,
-                (user_id, petName),
+                """
             )
+            
+            db_conn.execute(select_stmt, {
+                "user_id": user_id,
+                "name": petName
+            })
 
             row = db_conn.fetchone()[0]
 
@@ -279,14 +288,17 @@ def insert_meta_data(uid: str, email: str, petName: str):
             if row:
                 pet_id = row[0]
             else:
-                db_conn.execute(
+                insert_stmt = sqlalchemy.text(
                     """
                     INSERT INTO pets (user_id, name)
                     VALUES(%s,%s)
                     RETURNING ID
-                    """,
-                    (user_id, petName),
-                )
+                    """
+                )    
+                db_conn.execute(insert_stmt, {
+                    "user_id": user_id,
+                    "name": petName
+                })
 
             pet_id = cur.fetchone()[0]
             
