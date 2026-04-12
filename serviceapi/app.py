@@ -248,7 +248,6 @@ def insert_meta_data(uid: str, email: str, petName: str):
             if user_row:
                 user_id = user_row[0]
             else:
-                # Try to insert. If it conflicts, DO NOTHING and RETURNING yields no rows.
                 user_id = db_conn.execute(
                     sqlalchemy.text(
                         """
@@ -258,7 +257,7 @@ def insert_meta_data(uid: str, email: str, petName: str):
                         """
                     ),
                     {"uid": uid, "email": email},
-                ).fetchone()
+                ).fetchone()[0]
 
             # 2) Resolve (or create) pets.id
             pet_row = db_conn.execute(
