@@ -209,106 +209,93 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
 def insert_meta_data(uid: str, email: str, petName: str):
-
-    #use test value for email until the client app is enabled to pass email from firebase auth
-
-    email = "ry96@njit.edu"
-    
     if not uid and not email:
         raise ValueError("Either firebase_uid or email is required to identify the owner")
 
+    if not petName:
+        raise ValueError("petName is required")
+
     try:
         with db_pool.connect() as db_conn:
-            #Check if firebase user id or email already exists in the app_user table
-            if uid: 
-                select_stmt = sqlalchemy.text(
+            # 1) Resolve (or create) app_user.id
+            user_id = None
+
+            if uid:
+                user_row = db_conn.execute(
+                    sqlalchemy.text(
+                        """
+                        SELECT id
+                        FROM app_user
+                        WHERE firebase_uid = :firebase_uid
+                        LIMIT 1
+                        """
+                    ),
+                    {"firebase_uid": uid},
+                ).fetchone()
+            else:
+                user_row = db_conn.execute(
+                    sqlalchemy.text(
+                        """
+                        SELECT id
+                        FROM app_user
+                        WHERE email = :email
+                        LIMIT 1
+                        """
+                    ),
+                    {"email": email},
+                ).fetchone()
+
+            if user_row:
+                user_id = user_row[0]
+            else:
+                # Try to insert. If it conflicts, DO NOTHING and RETURNING yields no rows.
+                inserted = db_conn.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO app_user (id, firebase_uid, email, created_at)
+                        VALUES (gen_random_uuid(), :uid, :email, NOW())
+                        RETURNING id
+                        """
+                    ),
+                    {"uid": uid, "email": email},
+                ).fetchone()
+
+            # 2) Resolve (or create) pets.id
+            pet_row = db_conn.execute(
+                sqlalchemy.text(
                     """
                     SELECT id
-                    from app_user
-                    where firebase_uid = :firebase_uid
+                    FROM pets
+                    WHERE user_id = :user_id AND name = :name
                     LIMIT 1
                     """
-                )
-                result = db_conn.execute(select_stmt, {
-                    "firebase_uid" : uid
-                })
+                ),
+                {"user_id": user_id, "name": petName},
+            ).fetchone()
+
+            if pet_row:
+                pet_id = pet_row[0]
             else:
-                select_stmt = sqlalchemy.text(
-                    """
-                    SELECT id
-                    from app_user
-                    where email = :email
-                    LIMIT 1
-                    """
-                )
-                result = db_conn.execute(select_stmt, {
-                    "email" : email
-                })
+                pet_id = db_conn.execute(
+                    sqlalchemy.text(
+                        """
+                        INSERT INTO pets (user_id, name)
+                        VALUES (:user_id, :name)
+                        RETURNING id
+                        """
+                    ),
+                    {"user_id": user_id, "name": petName},
+                ).fetchone()[0]
 
-            row = result.fetchone()
-
-            #Insert new owner if it doesn't already exist in the app_user table
-            if row:
-                user_id  = row[0]
-            else:  
-                insert_stmt = sqlalchemy.text(
-                    """
-                    INSERT INTO app_user (id, firebase_uid, email, created_at)
-                    VALUES (gen_random_uuid(), :uid, :email, NOW())
-                    RETURNING ID
-                    ON CONFLICT (firebase_uid) DO NOTHING
-                    """
-                )
-                result = db_conn.execute(insert_stmt, {
-                    "uid": uid,
-                    "email": email
-                })
-                
-                user_id = result.fetchone()[0]
-
-            #Check if pet with corresponding owner's user_id exists
-            
-            select_stmt = sqlalchemy.text(
-                """
-                SELECT id
-                FROM pets
-                WHERE user_id = :user_id AND name = :name
-                LIMIT 1
-                """
-            )
-            
-            result = db_conn.execute(select_stmt, {
-                "user_id": user_id,
-                "name": petName
-            })
-
-            row = result.fetchone()[0]
-
-            #Insert new pet with corresponding owner's user id into pets table
-            if row:
-                pet_id = row[0]
-            else:
-                insert_stmt = sqlalchemy.text(
-                    """
-                    INSERT INTO pets (user_id, name)
-                    VALUES(:user_id,:name)
-                    RETURNING ID
-                    """
-                )    
-                result = db_conn.execute(insert_stmt, {
-                    "user_id": user_id,
-                    "name": petName
-                })
-
-            pet_id = result.fetchone()[0]
-            
             db_conn.commit()
-                
-    except Exception as e:
-        logger.exception("DB insert for metadata failed: %s", e)        
-        raise HTTPException(status_code=500, detail="DB insert for metadata failed")
 
-    return {"user_id": str(user_id), "pet_id:": str(pet_id)}
+        return {"user_id": str(user_id), "pet_id": str(pet_id)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("DB insert for metadata failed: %s", e)
+        raise HTTPException(status_code=500, detail="DB insert for metadata failed")
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
