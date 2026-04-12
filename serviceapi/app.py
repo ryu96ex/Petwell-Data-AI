@@ -225,11 +225,11 @@ def insert_meta_data(uid: str, email: str, petName: str):
                     """
                     SELECT id
                     from app_user
-                    where firebase_uid = %s
+                    where firebase_uid = :firebase_uid
                     LIMIT 1
                     """
                 )
-                db_conn.execute(select_stmt, {
+                result = db_conn.execute(select_stmt, {
                     "firebase_uid" : uid
                 })
             else:
@@ -237,15 +237,15 @@ def insert_meta_data(uid: str, email: str, petName: str):
                     """
                     SELECT id
                     from app_user
-                    where email = %s
+                    where email = :email
                     LIMIT 1
                     """
                 )
-                db_conn.execute(select_stmt, {
+                result = db_conn.execute(select_stmt, {
                     "email" : email
                 })
 
-            row = db_conn.fetchone()
+            row = result.fetchone()
 
             #Insert new owner if it doesn't already exist in the app_user table
             if row:
@@ -259,12 +259,12 @@ def insert_meta_data(uid: str, email: str, petName: str):
                     ON CONFLICT (firebase_uid) DO NOTHING
                     """
                 )
-                db_conn.execute(insert_stmt, {
+                result = db_conn.execute(insert_stmt, {
                     "uid": uid,
                     "email": email
                 })
                 
-                user_id = db_conn.fetchone()[0]
+                user_id = result.fetchone()[0]
 
             #Check if pet with corresponding owner's user_id exists
             
@@ -272,17 +272,17 @@ def insert_meta_data(uid: str, email: str, petName: str):
                 """
                 SELECT id
                 FROM pets
-                WHERE user_id = %s AND name = %s
+                WHERE user_id = :user_id AND name = :name
                 LIMIT 1
                 """
             )
             
-            db_conn.execute(select_stmt, {
+            result = db_conn.execute(select_stmt, {
                 "user_id": user_id,
                 "name": petName
             })
 
-            row = db_conn.fetchone()[0]
+            row = result.fetchone()[0]
 
             #Insert new pet with corresponding owner's user id into pets table
             if row:
@@ -291,16 +291,16 @@ def insert_meta_data(uid: str, email: str, petName: str):
                 insert_stmt = sqlalchemy.text(
                     """
                     INSERT INTO pets (user_id, name)
-                    VALUES(%s,%s)
+                    VALUES(:user_id,:name)
                     RETURNING ID
                     """
                 )    
-                db_conn.execute(insert_stmt, {
+                result = db_conn.execute(insert_stmt, {
                     "user_id": user_id,
                     "name": petName
                 })
 
-            pet_id = cur.fetchone()[0]
+            pet_id = result.fetchone()[0]
             
             db_conn.commit()
                 
