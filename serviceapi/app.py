@@ -298,46 +298,6 @@ def insert_meta_data(uid: str, email: str):
 
     return {"user_id": str(user_id), "pet_id:": str(pet_id)}
 
-def insert_new_pet(uid: str, petName: str):
-     try:
-        with db_pool.connect() as db_conn:
-
-            db_conn.execute(
-                """
-                SELECT id
-                FROM pets
-                WHERE user_id = %s AND name = %s
-                LIMIT 1
-                """,
-                (uid, petName),
-            )
-            row = db_conn.fetchone()[0]
-
-            if row:
-                pet = row[0]
-            else:
-                db_conn.execute(
-                    """
-                    INSERT INTO pets (user_id, name)
-                    VALUES(%s,%s)
-                    RETURNING ID
-                    """,
-                    (uid, petName),
-                )
-
-                pet_id = cur.fetchone()[0]
-            
-            db_conn.commit()
-            
-            logger.info("***New pet record successfully inserted for pet: %s", petName)
-
-    except Exception as e:
-        logger.exception("DB insert failed for new pet failed: %s", e)        
-        raise HTTPException(status_code=500, detail="DB insert failed for new pet failed")
-
-    return {"pet_id": pet_id}
-    
-
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
     petName: str = Query(...),
