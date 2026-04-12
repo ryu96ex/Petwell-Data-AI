@@ -168,7 +168,7 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
-    blob_path = f"medical_records/{pet_name}/{file_name}"
+    blob_path = f"medical_records/{uid}/{pet_name}/{file_name}"
     blob = bucket.blob(blob_path)
 
     credentials = get_credentials()
@@ -184,25 +184,159 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
 
     # Currently inserts a hard-coded user
     # Replace this with real inserts later.
-    try:
-        with db_pool.connect() as db_conn:
-            insert_stmt = sqlalchemy.text(
-                """
-                INSERT INTO app_user (id, firebase_uid, email, created_at)
-                VALUES (gen_random_uuid(), :uid, :email, NOW())
-                ON CONFLICT (firebase_uid) DO NOTHING
-                """
-            )
-            db_conn.execute(insert_stmt, {
-                "uid": uid,
-                "email": email
-            })
-            db_conn.commit()
-    except Exception as e:
-        logger.exception("DB insert failed: %s", e)        
-        raise HTTPException(status_code=500, detail="DB insert failed")
+    # try:
+    #     with db_pool.connect() as db_conn:
+            
+    #         insert_stmt = sqlalchemy.text(
+    #             """
+    #             INSERT INTO app_user (id, firebase_uid, email, created_at)
+    #             VALUES (gen_random_uuid(), :uid, :email, NOW())
+    #             ON CONFLICT (firebase_uid) DO NOTHING
+    #             """
+    #         )
+    #         db_conn.execute(insert_stmt, {
+    #             "uid": uid,
+    #             "email": email
+    #         })
+    #         db_conn.commit()
+    # except Exception as e:
+    #     logger.exception("DB insert failed: %s", e)        
+    #     raise HTTPException(status_code=500, detail="DB insert failed")
+
+    #check for existing owner and insert new record if they do not exist
+    insert_meta_data(uid, email, pet_name)
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
+
+def insert_meta_data(uid: str, email: str):
+
+    #use test value for email until the client app is enabled to pass email from firebase auth
+
+    email = "ry96@njit.edu"
+    
+    if not uid and not email:
+        raise ValueError("Either firebase_uid or email is required to identify the owner")
+
+    try:
+        with db_pool.connect() as db_conn:
+            #Check if firebase user id or email already exists in the app_user table
+            if uid: 
+                db_conn.execute(
+                    """
+                    SELECT id
+                    from app_user
+                    where firebase_uid = %s
+                    LIMIT 1
+                    """,
+                    (uid,),
+                )
+            else:
+                db_conn.execute(
+                    """
+                    SELECT id
+                    from app_user
+                    where email = %s
+                    LIMIT 1
+                    """,
+                    (email,),
+                )
+
+            row = db_conn.fetchone()
+
+            #Insert new owner if it doesn't already exist in the app_user table
+            if row:
+                user_id  = row[0]
+            else:  
+                insert_stmt = sqlalchemy.text(
+                    """
+                    INSERT INTO app_user (id, firebase_uid, email, created_at)
+                    VALUES (gen_random_uuid(), :uid, :email, NOW())
+                    RETURNING ID
+                    ON CONFLICT (firebase_uid) DO NOTHING
+                    """
+                )
+                db_conn.execute(insert_stmt, {
+                    "uid": uid,
+                    "email": email
+                })
+                
+                user_id = db_conn.fetchone()[0]
+
+            #Check if pet with corresponding owner's user_id exists
+            db_conn.execute(
+                """
+                SELECT id
+                FROM pets
+                WHERE user_id = %s AND name = %s
+                LIMIT 1
+                """,
+                (user_id, petName),
+            )
+
+            row = db_conn.fetchone()[0]
+
+            #Insert new pet with corresponding owner's user id into pets table
+            if row:
+                pet_id = row[0]
+            else:
+                db_conn.execute(
+                    """
+                    INSERT INTO pets (user_id, name)
+                    VALUES(%s,%s)
+                    RETURNING ID
+                    """,
+                    (user_id, petName),
+                )
+
+            pet_id = cur.fetchone()[0]
+            
+            db_conn.commit()
+                
+    except Exception as e:
+        logger.exception("DB insert for metadata failed: %s", e)        
+        raise HTTPException(status_code=500, detail="DB insert for metadata failed")
+
+    return {"user_id": str(user_id), "pet_id:": str(pet_id)}
+
+def insert_new_pet(uid: str, petName: str):
+     try:
+        with db_pool.connect() as db_conn:
+
+            db_conn.execute(
+                """
+                SELECT id
+                FROM pets
+                WHERE user_id = %s AND name = %s
+                LIMIT 1
+                """,
+                (uid, petName),
+            )
+            row = db_conn.fetchone()[0]
+
+            if row:
+                pet = row[0]
+            else:
+                db_conn.execute(
+                    """
+                    INSERT INTO pets (user_id, name)
+                    VALUES(%s,%s)
+                    RETURNING ID
+                    """,
+                    (uid, petName),
+                )
+
+                pet_id = cur.fetchone()[0]
+            
+            db_conn.commit()
+            
+            logger.info("***New pet record successfully inserted for pet: %s", petName)
+
+    except Exception as e:
+        logger.exception("DB insert failed for new pet failed: %s", e)        
+        raise HTTPException(status_code=500, detail="DB insert failed for new pet failed")
+
+    return {"pet_id": pet_id}
+    
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
