@@ -182,110 +182,100 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         access_token=credentials.token,
     )
 
-    # Currently inserts a hard-coded user
-    # Replace this with real inserts later.
-    # try:
-    #     with db_pool.connect() as db_conn:
-            
-    #         insert_stmt = sqlalchemy.text(
-    #             """
-    #             INSERT INTO app_user (id, firebase_uid, email, created_at)
-    #             VALUES (gen_random_uuid(), :uid, :email, NOW())
-    #             ON CONFLICT (firebase_uid) DO NOTHING
-    #             """
-    #         )
-    #         db_conn.execute(insert_stmt, {
-    #             "uid": uid,
-    #             "email": email
-    #         })
-    #         db_conn.commit()
-    # except Exception as e:
-    #     logger.exception("DB insert failed: %s", e)        
-    #     raise HTTPException(status_code=500, detail="DB insert failed")
-
     #check for existing owner and insert new record if they do not exist
     insert_meta_data(uid, email, pet_name)
 
     return {"signedUrl": url, "gcsFilePath": blob_path}
 
-def insert_meta_data(uid: str, email: str, petName: str):
+def get_or_create_app_user_id(db_conn, uid: Optional[str], email: Optional[str]):
+    """
+    Resolve (or create) app_user.id using firebase_uid when available, otherwise email.
+    Returns: UUID (as returned by the driver).
+    """
     if not uid and not email:
         raise ValueError("Either firebase_uid or email is required to identify the owner")
 
+    if uid:
+        user_row = db_conn.execute(
+            sqlalchemy.text(
+                """
+                SELECT id
+                FROM app_user
+                WHERE firebase_uid = :firebase_uid
+                LIMIT 1
+                """
+            ),
+            {"firebase_uid": uid},
+        ).fetchone()
+    else:
+        user_row = db_conn.execute(
+            sqlalchemy.text(
+                """
+                SELECT id
+                FROM app_user
+                WHERE email = :email
+                LIMIT 1
+                """
+            ),
+            {"email": email},
+        ).fetchone()
+
+    if user_row:
+        return user_row[0]
+
+    # Create user (store both uid/email if provided)
+    return db_conn.execute(
+        sqlalchemy.text(
+            """
+            INSERT INTO app_user (id, firebase_uid, email, created_at)
+            VALUES (gen_random_uuid(), :uid, :email, NOW())
+            RETURNING id
+            """
+        ),
+        {"uid": uid, "email": email},
+    ).fetchone()[0]
+
+
+def get_or_create_pet_id(db_conn, user_id, petName: str):
+    """
+    Resolve (or create) pets.id for a given user_id + pet name.
+    Returns: UUID (as returned by the driver).
+    """
     if not petName:
         raise ValueError("petName is required")
 
+    pet_row = db_conn.execute(
+        sqlalchemy.text(
+            """
+            SELECT id
+            FROM pets
+            WHERE user_id = :user_id AND name = :name
+            LIMIT 1
+            """
+        ),
+        {"user_id": user_id, "name": petName},
+    ).fetchone()
+
+    if pet_row:
+        return pet_row[0]
+
+    return db_conn.execute(
+        sqlalchemy.text(
+            """
+            INSERT INTO pets (user_id, name)
+            VALUES (:user_id, :name)
+            RETURNING id
+            """
+        ),
+        {"user_id": user_id, "name": petName},
+    ).fetchone()[0]
+
+
+def insert_meta_data(uid: str, email: str, petName: str):
     try:
         with db_pool.connect() as db_conn:
-            # 1) Resolve (or create) app_user.id
-            user_id = None
-
-            if uid:
-                user_row = db_conn.execute(
-                    sqlalchemy.text(
-                        """
-                        SELECT id
-                        FROM app_user
-                        WHERE firebase_uid = :firebase_uid
-                        LIMIT 1
-                        """
-                    ),
-                    {"firebase_uid": uid},
-                ).fetchone()
-            else:
-                user_row = db_conn.execute(
-                    sqlalchemy.text(
-                        """
-                        SELECT id
-                        FROM app_user
-                        WHERE email = :email
-                        LIMIT 1
-                        """
-                    ),
-                    {"email": email},
-                ).fetchone()
-
-            if user_row:
-                user_id = user_row[0]
-            else:
-                user_id = db_conn.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO app_user (id, firebase_uid, email, created_at)
-                        VALUES (gen_random_uuid(), :uid, :email, NOW())
-                        RETURNING id
-                        """
-                    ),
-                    {"uid": uid, "email": email},
-                ).fetchone()[0]
-
-            # 2) Resolve (or create) pets.id
-            pet_row = db_conn.execute(
-                sqlalchemy.text(
-                    """
-                    SELECT id
-                    FROM pets
-                    WHERE user_id = :user_id AND name = :name
-                    LIMIT 1
-                    """
-                ),
-                {"user_id": user_id, "name": petName},
-            ).fetchone()
-
-            if pet_row:
-                pet_id = pet_row[0]
-            else:
-                pet_id = db_conn.execute(
-                    sqlalchemy.text(
-                        """
-                        INSERT INTO pets (user_id, name)
-                        VALUES (:user_id, :name)
-                        RETURNING id
-                        """
-                    ),
-                    {"user_id": user_id, "name": petName},
-                ).fetchone()[0]
-
+            user_id = get_or_create_app_user_id(db_conn, uid=uid, email=email)
+            pet_id = get_or_create_pet_id(db_conn, user_id=user_id, petName=petName)
             db_conn.commit()
 
         return {"user_id": str(user_id), "pet_id": str(pet_id)}
@@ -335,5 +325,3 @@ def get_pet_trends(
     except Exception as e:
         logger.exception("DB Fetch Error: %s", e)
         raise HTTPException(status_code=500, detail="Could not fetch medical trends")
-
-
