@@ -148,33 +148,33 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized: Missing or invalid token")
 
-    token = authorization.split("Bearer ")[1]
+    token = authorization.split("Bearer ", 1)[1].strip()
 
     try:
         decoded_token = auth.verify_id_token(token)
-        uid = decoded_token.get('uid')
-        email = decoded_token.get('email')
-        logger.info("***Uid=%s Email%s", uid, email)
+        uid = decoded_token.get("uid")
+        email = decoded_token.get("email")
+        if not uid:
+            raise HTTPException(status_code=401, detail="Invalid token: uid missing")
+        logger.info("***Uid=%s Email=%s", uid, email)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Token verification failed: %s", e)
-        return JSONResponse({"error": "Invalid token"}), 401
-    
-    
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
     pet_name = payload.petName
     file_name = payload.fileName
     content_type = payload.contentType
 
-    logger.info("***PetName=%s FileName=%s ContentType=%s", pet_name, file_name, content_type)
+    # Generate medical record UUID object 
+    record_id = uuid.uuid4()
 
     storage_client = storage.Client()
     bucket = storage_client.bucket(BUCKET_NAME)
 
-    # generate unique record id to be used to identify medical record upload
-    record_id = uuid.uuid4()
-
-    #blob path includes, owner's id, petname, medical record id, and file name
-    blob_path = f"medical_records/{uid}/{pet_name}/{record_id}/{file_name}"
-
+    # Include UUID in blob path (as string)
+    blob_path = f"medical_records/{uid}/{pet_name}/{str(record_id)}/{file_name}"
     blob = bucket.blob(blob_path)
 
     credentials = get_credentials()
@@ -188,10 +188,20 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         access_token=credentials.token,
     )
 
-    #check for existing owner and insert new record if they do not exist
-    insert_meta_data(uid, email, pet_name, record_id, blob_path)
+    # Create/ensure DB rows and track the record
+    insert_meta_data(
+        uid,
+        email,
+        pet_name,
+        record_id=record_id,
+        blob_path=blob_path,
+    )
 
-    return {"signedUrl": url, "gcsFilePath": blob_path}
+    return {
+        "signedUrl": url,
+        "gcsFilePath": blob_path,
+        "recordId": str(record_id),  # JSON-friendly
+    }
 
 def get_or_create_app_user_id(db_conn, uid: Optional[str], email: Optional[str]):
     """
@@ -279,14 +289,16 @@ def get_or_create_pet_id(db_conn, user_id, petName: str):
 def create_medical_record_row(
     db_conn,
     *,
-    record_id: str,
+    record_id: uuid.UUID,
     pet_id,
     blob_path: str,
     status: str = "UPLOADING",
 ):
     """
-    Create/track a medical record using an app-generated UUID.
-    Ensures blob_path is tied to the same record id that appears in the path.
+    Insert a new medical_records row.
+    medical_records schema:
+      id (uuid PK), pet_id (uuid), blob_path (text unique), status (text),
+      created_at/updated_at (timestamptz), visit_date (date null), error (text null)
     """
     db_conn.execute(
         sqlalchemy.text(
@@ -296,14 +308,24 @@ def create_medical_record_row(
             """
         ),
         {
-            "id": record_id,
+            "id": record_id,        # uuid.UUID is fine for Postgres UUID columns
             "pet_id": pet_id,
-            "blob_path": blob_path,
+            "blob_path": blob_path, # text
             "status": status,
         },
     )
 
-def insert_meta_data(uid: str, email: str, petName: str, record_id, blob_path):
+def insert_meta_data(
+    uid: str,
+    email: str,
+    petName: str,
+    *,
+    record_id: uuid.UUID,
+    blob_path: str,
+):
+    """
+    Ensures app_user + pet exist, then creates a medical_records row tied to blob_path.
+    """
     try:
         with db_pool.connect() as db_conn:
             user_id = get_or_create_app_user_id(db_conn, uid=uid, email=email)
@@ -316,16 +338,20 @@ def insert_meta_data(uid: str, email: str, petName: str, record_id, blob_path):
                 blob_path=blob_path,
                 status="UPLOADING",
             )
-            
+
             db_conn.commit()
 
-        return {"user_id": str(user_id), "pet_id": str(pet_id), "medical record_id": str(record_id)}
+        return {
+            "user_id": str(user_id),
+            "pet_id": str(pet_id),
+            "medical_record_id": str(record_id),
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("DB insert for metadata failed: %s", e)
-        raise HTTPException(status_code=500, detail="DB insert for metadata failed")
+        logger.exception("DB insert failed (user/pet/medical_record): %s", e)
+        raise HTTPException(status_code=500, detail="DB insert failed")
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
