@@ -355,8 +355,8 @@ def insert_meta_data(
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
-    petName: str = Query(...),
-    metric: str = Query("ALT"),
+    petName: str = Query(...), #required Query Parameter being passed in through API call
+    metric: str = Query("ALT"), #using default metric value of ALT if caller doesn't specify
     uid: str = Depends(verify_firebase_uid),
 ):
     try:
@@ -382,7 +382,7 @@ def get_pet_trends(
         trends = [
             {
                 "value": float(row[1]),
-                "label": row[0].strftime("%b %d") if isinstance(row[0], datetime.date) else str(row[0]),
+                "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
             }
             for row in rows
         ]
