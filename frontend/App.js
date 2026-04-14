@@ -38,7 +38,7 @@ const auth = getAuth(app);
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [petName, setPetName] = useState('Guppy'); // Default fallback ID
+  const [petName, setPetName] = useState('Guppy'); // Default fallback ID, currently using hardcoded petName until platform team passes in petName through deeplink
   const [uploading, setUploading] = useState(false);
   const [loadingCharts, setLoadingCharts] = useState(true);
   const [chartData, setChartData] = useState([]);
@@ -62,6 +62,8 @@ export default function App() {
     return () => subscription.remove();
   }, []);
 
+  //This will parse the petName Query parameter that is passed in with the deeplink from the platform team's page
+  //Deep Link format on from the platform team leading to this page should look like: petwell://?petName=Fluffy
   const handleDeepLink = (url) => {
     const { queryParams } = Linking.parse(url);
     console.log("Deep Link Received:", url);
@@ -76,6 +78,11 @@ export default function App() {
 
   // --- AUTHENTICATION & INITIAL FETCH ---
   useEffect(() => {
+    //We are using anonymous sign in that doesn't require actual login/password authentication for testing purposes at the moment
+    //Remove the below initAuth section when platform team finishes implementing firebase email/password login in their app.js like so: 
+    //import { signInWithEmailAndPassword } from "firebase/auth";
+    //await signInWithEmailAndPassword(auth, email, password);
+
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
@@ -95,11 +102,12 @@ export default function App() {
     return () => unsubscribeAuth();
   }, [petName]);
 
+  //FETCH CHART DATA LOGIC
+  //API call to query chart data from database in our backend that will be visualized on our graphs
   const fetchChartData = async (targetPetName) => {
     try {
-      //const response = await fetch(`${SERVICE_API_ENDPOINT}/get-pet-trends?petId=${targetPetId || petId}`);
       
-      const token = await user.getIdToken(); // Firebase ID token
+      const token = await user.getIdToken(); // Firebase ID token being sent to backend that firebase UID is being extracted from
 
       const petName = targetPetName || petName;
 
@@ -108,7 +116,7 @@ export default function App() {
       {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${token}`, 
         },
       });
 
@@ -124,7 +132,7 @@ export default function App() {
       setLoadingCharts(false);
       return true;
     } catch (error) {
-      // Fallback mock data if server isn't ready
+      // Fallback to mock data if server isn't ready
       if (chartData.length === 0) {
         setChartData([
           { value: 10, label: 'Jan' },
@@ -140,7 +148,7 @@ export default function App() {
   // --- SMART POLLING ---
   const startPolling = () => {
     let attempts = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 6;
 
     const interval = setInterval(async () => {
       attempts++;
@@ -160,6 +168,8 @@ export default function App() {
   };
 
   // --- UPLOAD HANDLER ---
+  //API call to create and request a signed upload URL in our backend. 
+  //PUT signedURL uploads to the corresponding Google Cloud Storage Bucket Directory as defined by the URL
   const handlePickAndUpload = async () => {
     if (!user) {
       Alert.alert("Wait", "Please wait for authentication...");
@@ -183,6 +193,7 @@ export default function App() {
       const targetUrl = `${SERVICE_API_ENDPOINT.replace(/\/$/, '')}/get-signed-url`;
       const contentType = file.mimeType || 'application/pdf';
       
+      //API Call passes in petName, fileName, and file Content Type in JSON format to create signeduploadURL
       const urlResponse = await fetch(targetUrl, {
         method: 'POST',
         headers: {
@@ -212,6 +223,7 @@ export default function App() {
         body = file.file || file; 
       }
 
+      //Uploads to the Google Cloud Storage Bucket
       const gcsResponse = await fetch(signedUrl, {
         method: 'PUT',
         headers: { 'Content-Type': contentType },
