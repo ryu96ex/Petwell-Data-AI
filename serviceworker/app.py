@@ -5,7 +5,7 @@ import os
 import re
 import hashlib
 import io
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +15,8 @@ from google.cloud import vision
 from google.api_core import exceptions as gcp_exceptions
 from google.cloud.sql.connector import Connector, IPTypes
 from pypdf import PdfReader
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig
 
 import sqlalchemy
 
@@ -96,9 +98,13 @@ else:
     logger.warning("Database not configured; starting without db_pool.")
 
 
-def if_pdf_path(blob_path: str) -> bool:
+def _is_pdf_path(blob_path: str) -> bool:
     # worker only handles pdf uploads
-    return blob_path.endswith(".pdf")
+    return blob_path.lower().endswith(".pdf")
+
+
+def _is_supported_image_path(blob_path: str) -> bool:
+    return blob_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
 
 def _extract_text_with_pdf_reader(
     *,
@@ -162,6 +168,66 @@ def _extract_text_with_vision_ocr(*, bucket: str, blob_path: str, task_id: str) 
                 ocr_text_parts.append(full_text)
 
     return "\n".join(ocr_text_parts).strip()
+
+
+def _extract_text_from_image_with_vision(
+    *,
+    bucket: str,
+    blob_path: str,
+    generation: Optional[str] = None,
+) -> str:
+    # OCR image bytes directly for jpg/png uploads.
+    storage_client = storage.Client()
+    vision_client = vision.ImageAnnotatorClient()
+    blob = storage_client.bucket(bucket).blob(blob_path, generation=generation)
+    image_bytes = blob.download_as_bytes()
+
+    response = vision_client.document_text_detection(image=vision.Image(content=image_bytes))
+    if response.error.message:
+        raise RuntimeError(f"Vision OCR error: {response.error.message}")
+    return (response.full_text_annotation.text or "").strip()
+
+
+def _extract_json_object(raw: str) -> Any:
+    # Accept either raw JSON or fenced markdown JSON.
+    trimmed = (raw or "").strip()
+    if trimmed.startswith("```"):
+        trimmed = re.sub(r"^```(?:json)?\s*", "", trimmed)
+        trimmed = re.sub(r"\s*```$", "", trimmed)
+    return json.loads(trimmed)
+
+
+def _extract_structured_data_with_vertex(raw_text: str) -> dict:
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    location = os.environ.get("VERTEX_LOCATION", "us-central1")
+    model_name = os.environ.get("VERTEX_MODEL", "gemini-1.5-flash")
+    if not project:
+        raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
+
+    vertexai.init(project=project, location=location)
+    model = GenerativeModel(model_name)
+    prompt = (
+        "Extract structured medical-record data from the text and return JSON only.\n"
+        "Required shape:\n"
+        "{\n"
+        '  "document_type": "string",\n'
+        '  "pet_name": "string|null",\n'
+        '  "visit_date": "YYYY-MM-DD|null",\n'
+        '  "clinic_name": "string|null",\n'
+        '  "diagnoses": ["string"],\n'
+        '  "medications": ["string"],\n'
+        '  "measurements": [{"name":"string","value":"string","unit":"string|null"}],\n'
+        '  "notes": "string|null"\n'
+        "}\n"
+        "If a field is unavailable, use null or empty array.\n\n"
+        f"TEXT:\n{raw_text}"
+    )
+
+    response = model.generate_content(
+        prompt,
+        generation_config=GenerationConfig(temperature=0.1, max_output_tokens=2048),
+    )
+    return _extract_json_object(response.text or "{}")
 
 def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubsub_message_id: Optional[str]) -> str:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
@@ -263,30 +329,36 @@ async def tasks_process(payload: dict):
     if not bucket or not blob_path:
         raise HTTPException(status_code=400, detail=f"Missing bucket/blob_path: {payload}")
 
-    # TODO: implement OCR + Vertex + DB updates
+    is_pdf = _is_pdf_path(blob_path)
+    is_image = _is_supported_image_path(blob_path)
+    if not is_pdf and not is_image:
+        logger.info("Skipping unsupported object type: gs://%s/%s", bucket, blob_path)
+        return {"status": "skipped", "reason": "unsupported_file_type"}
 
-    # Ignore non-PDF files routed from the same storage notification pipeline.
-    if not _is_pdf_path(blob_path):
-        logger.info("Skipping non-PDF object: gs://%s/%s", bucket, blob_path)
-        return {"status": "skipped", "reason": "non_pdf"}
-
-    logger.info("Processing PDF: gs://%s/%s gen=%s", bucket, blob_path, generation)
+    logger.info("Processing file: gs://%s/%s gen=%s", bucket, blob_path, generation)
 
     try:
-        # Attempt parser-based extraction first; OCR only when text is insufficient.
-        parsed_text = _extract_text_with_pdf_reader(bucket=bucket, blob_path=blob_path, generation=generation)
-        extraction_mode = "pdf_parser"
+        if is_pdf:
+            # Attempt parser-based extraction first; OCR only when text is insufficient.
+            parsed_text = _extract_text_with_pdf_reader(bucket=bucket, blob_path=blob_path, generation=generation)
+            extraction_mode = "pdf_parser"
 
-        # Run OCR if needed
-        if _needs_ocr(parsed_text):
-            logger.info("PDF parser yielded insufficient text; running OCR for gs://%s/%s", bucket, blob_path,)
-            task_id = hashlib.sha256(f"{bucket}/{blob_path}#{generation or ''}".encode("utf-8")).hexdigest()[:32]
-            parsed_text = _extract_text_with_vision_ocr(bucket=bucket, blob_path=blob_path, task_id=task_id)
-            extraction_mode = "ocr"
+            if _needs_ocr(parsed_text):
+                logger.info("PDF parser yielded insufficient text; running OCR for gs://%s/%s", bucket, blob_path)
+                task_id = hashlib.sha256(f"{bucket}/{blob_path}#{generation or ''}".encode("utf-8")).hexdigest()[:32]
+                parsed_text = _extract_text_with_vision_ocr(bucket=bucket, blob_path=blob_path, task_id=task_id)
+                extraction_mode = "ocr_pdf"
+        else:
+            parsed_text = _extract_text_from_image_with_vision(
+                bucket=bucket,
+                blob_path=blob_path,
+                generation=generation,
+            )
+            extraction_mode = "ocr_image"
         
         # Fail explicitly when both parser and OCR produce no usable text
         if not parsed_text:
-            raise HTTPException(status_code=422, detail="Failed to extract text from PDF")
+            raise HTTPException(status_code=422, detail="Failed to extract text from file")
 
         logger.info(
             "Text extraction complete mode=%s chars=%s messageId=%s",
@@ -294,12 +366,20 @@ async def tasks_process(payload: dict):
             len(parsed_text),
             pubsub_message_id,
         )
+
+        structured_data = _extract_structured_data_with_vertex(parsed_text)
+        logger.info("Vertex extraction complete messageId=%s", pubsub_message_id)
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("PDF processing failed for gs://%s/%s: %s", bucket, blob_path, e)
-        raise HTTPException(status_code=500, detail="PDF processing failed")
+        logger.exception("File processing failed for gs://%s/%s: %s", bucket, blob_path, e)
+        raise HTTPException(status_code=500, detail="File processing failed")
 
     # TODO: implement AI JSON structuring + DB updates with extracted text.
 
-    return {"status": "processed", "extraction_mode": extraction_mode, "text_length": len(parsed_text)}
+    return {
+        "status": "processed",
+        "extraction_mode": extraction_mode,
+        "text_length": len(parsed_text),
+        "structured_data": structured_data,
+    }
