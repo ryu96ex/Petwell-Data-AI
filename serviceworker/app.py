@@ -201,8 +201,8 @@ def _extract_json_object(raw: str) -> Any:
 
 def _extract_structured_data_with_vertex(raw_text: str) -> dict:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-    location = os.environ.get("VERTEX_LOCATION", "us-central1")
-    model_name = os.environ.get("VERTEX_MODEL", "gemini-1.5-flash")
+    location = os.environ.get("VERTEX_LOCATION")
+    model_name = os.environ.get("VERTEX_MODEL")
     if not project:
         raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
 
