@@ -5,6 +5,8 @@ import os
 import re
 import hashlib
 import io
+import importlib.metadata as md
+
 from typing import Optional, Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -205,7 +207,10 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
     model_name = os.environ.get("VERTEX_MODEL")
     if not project:
         raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
-
+        
+    logging.info("vertexai=%s", md.version("vertexai"))
+    logging.info("google-cloud-aiplatform=%s", md.version("google-cloud-aiplatform"))
+    
     vertexai.init(project=project, location=location)
     logging.info("Vertex project=%s location=%s model_name=%r", project, location, model_name)
     model = GenerativeModel(model_name)
