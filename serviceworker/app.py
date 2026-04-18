@@ -207,6 +207,7 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
         raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
 
     vertexai.init(project=project, location=location)
+    logging.info("Vertex project=%s location=%s model_name=%r", project, location, model_name)
     model = GenerativeModel(model_name)
     prompt = (
         "Extract structured medical-record data from the text and return JSON only.\n"
