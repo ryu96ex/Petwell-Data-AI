@@ -1,11 +1,11 @@
-fastapi==0.109.0
+vfastapi==0.109.0vvvvvv
 uvicorn[standard]==0.27.0
 gunicorn==21.2.0
 
 google-cloud-tasks==2.16.0
 google-cloud-storage==2.14.0
 google-cloud-vision==3.7.2
-google-cloud-aiplatform==1.71.1
+google-cloud-aiplatform[vertexai]==1.71.1
 google-auth==2.27.0
 
 pypdf==4.0.1
