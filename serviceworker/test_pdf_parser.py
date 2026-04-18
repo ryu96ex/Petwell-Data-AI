@@ -1,21 +1,29 @@
-import io
-from pypdf import PdfReader
+import argparse
+import asyncio
+import json
 
-PDF_PATH = "test_medical_record.pdf"  # change if needed
+from app import tasks_process
 
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    text_parts = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        text_parts.append(f"\n--- Page {i+1} ---\n{text}")
-    return "\n".join(text_parts).strip()
 
-with open(PDF_PATH, "rb") as f:
-    pdf_bytes = f.read()
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run serviceworker extraction test against a GCS object."
+    )
+    parser.add_argument("--bucket", required=True, help="GCS bucket name")
+    parser.add_argument("--blob-path", required=True, help="Blob path inside bucket")
+    parser.add_argument("--generation", required=False, help="Optional object generation")
+    args = parser.parse_args()
 
-text = extract_text_from_pdf_bytes(pdf_bytes)
+    payload = {
+        "bucket": args.bucket,
+        "blob_path": args.blob_path,
+        "generation": args.generation,
+        "pubsub_message_id": "local-test",
+    }
 
-print("Extracted text length:", len(text))
-print("\nPreview:\n")
-print(text[:2000])
+    result = asyncio.run(tasks_process(payload))
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
