@@ -192,12 +192,16 @@ def _extract_text_from_image_with_vision(
 
 
 def _extract_json_object(raw: str) -> Any:
-    # Accept either raw JSON or fenced markdown JSON.
     trimmed = (raw or "").strip()
     if trimmed.startswith("```"):
         trimmed = re.sub(r"^```(?:json)?\s*", "", trimmed)
         trimmed = re.sub(r"\s*```$", "", trimmed)
-    return json.loads(trimmed)
+
+    try:
+        return json.loads(trimmed)
+    except json.JSONDecodeError as e:
+        logger.error("Model returned invalid JSON: %s; first_500=%r", e, trimmed[:500])
+        raise HTTPException(status_code=502, detail="Vertex returned invalid JSON")
 
 
 def _extract_structured_data_with_vertex(raw_text: str) -> dict:
@@ -229,7 +233,11 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
 
     response = model.generate_content(
         prompt,
-        generation_config=GenerationConfig(temperature=0.1, max_output_tokens=2048),
+        generation_config=GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+        ),
     )
     return _extract_json_object(response.text or "{}")
 
