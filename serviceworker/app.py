@@ -235,7 +235,7 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
         prompt,
         generation_config=GenerationConfig(
             temperature=0.1,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
             response_mime_type="application/json",
         ),
     )
