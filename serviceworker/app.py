@@ -389,6 +389,7 @@ async def tasks_process(payload: dict):
         )
 
         structured_data = _extract_structured_data_with_vertex(parsed_text)
+        logger.info("Structured JSON data extracted with vertex ai=%s", structured_data)
         logger.info("Vertex extraction complete messageId=%s", pubsub_message_id)
     except HTTPException:
         raise
