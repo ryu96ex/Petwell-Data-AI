@@ -13,3 +13,9 @@ pypdf==4.0.1
 cloud-sql-python-connector~=1.0
 pg8000==1.30.3
 SQLAlchemy==2.0.25
+
+
+
+
+
+

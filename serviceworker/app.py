@@ -189,12 +189,16 @@ def _extract_text_from_image_with_vision(
 
 
 def _extract_json_object(raw: str) -> Any:
-    # Accept either raw JSON or fenced markdown JSON.
     trimmed = (raw or "").strip()
     if trimmed.startswith("```"):
         trimmed = re.sub(r"^```(?:json)?\s*", "", trimmed)
         trimmed = re.sub(r"\s*```$", "", trimmed)
-    return json.loads(trimmed)
+
+    try:
+        return json.loads(trimmed)
+    except json.JSONDecodeError as e:
+        logger.error("Model returned invalid JSON: %s; first_500=%r", e, trimmed[:500])
+        raise HTTPException(status_code=502, detail="Vertex returned invalid JSON")
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -456,12 +460,13 @@ def _find_medical_record_id_by_blob_path(*, conn: sqlalchemy.Connection, blob_pa
 
 def _extract_structured_data_with_vertex(raw_text: str) -> dict:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-    location = os.environ.get("VERTEX_LOCATION", "us-central1")
-    model_name = os.environ.get("VERTEX_MODEL", "gemini-1.5-flash")
+    location = os.environ.get("VERTEX_LOCATION")
+    model_name = os.environ.get("VERTEX_MODEL")
     if not project:
         raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
-
+    
     vertexai.init(project=project, location=location)
+    logging.info("Vertex project=%s location=%s model_name=%r", project, location, model_name)
     model = GenerativeModel(model_name)
     prompt = (
         "Extract structured medical-record data from the text and return JSON only.\n"
@@ -482,7 +487,11 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
 
     response = model.generate_content(
         prompt,
-        generation_config=GenerationConfig(temperature=0.1, max_output_tokens=2048),
+        generation_config=GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+        ),
     )
     return _extract_json_object(response.text or "{}")
 
@@ -634,6 +643,7 @@ async def tasks_process(payload: dict):
         )
 
         structured_data = _extract_structured_data_with_vertex(parsed_text)
+        logger.info("Structured JSON data extracted with vertex ai=%s", structured_data)
         logger.info("Vertex extraction complete messageId=%s", pubsub_message_id)
     except HTTPException:
         raise
