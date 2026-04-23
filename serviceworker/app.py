@@ -519,15 +519,23 @@ def enqueue_task(*, bucket: str, blob_path: str, generation: Optional[str], pubs
         }
 
     # Idempotent enqueue: deterministic task name
-    # Build a job key string using bucket + name + generation and hash it to a short safe ID:
-
     job_key = f"{bucket}/{blob_path}#{generation or ''}"
     task_hash = hashlib.sha256(job_key.encode("utf-8")).hexdigest()[:32]
     task_id = f"process-{task_hash}"
-    task["name"] = client.task_path(project, location, queue, task_id)
-    
-    created = client.create_task(request={"parent": parent, "task": task})
-    return created.name
+    task_name = client.task_path(project, location, queue, task_id)
+    task["name"] = task_name
+
+    try:
+        created = client.create_task(request={"parent": parent, "task": task})
+        return created.name
+    except gcp_exceptions.AlreadyExists:
+        logger.info(
+            "Cloud Task already exists (dedup); treating as success task=%s job_key=%s pubsub_message_id=%s",
+            task_name,
+            job_key,
+            pubsub_message_id,
+        )
+        return task_name
 
 
 @app.get("/")
@@ -618,8 +626,9 @@ async def tasks_process(payload: dict):
             raise HTTPException(status_code=422, detail="Failed to extract text from file")
 
         logger.info(
-            "Text extraction complete mode=%s chars=%s messageId=%s",
+            "Text extraction complete mode=%s text=%s chars=%s messageId=%s",
             extraction_mode,
+            parsed_text,
             len(parsed_text),
             pubsub_message_id,
         )
