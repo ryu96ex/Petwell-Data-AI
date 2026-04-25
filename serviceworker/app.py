@@ -5,7 +5,8 @@ import os
 import re
 import hashlib
 import io
-
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Optional, Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -18,13 +19,9 @@ from google.cloud.sql.connector import Connector, IPTypes
 from pypdf import PdfReader
 import vertexai
 from vertexai.generative_models import GenerativeModel, GenerationConfig
-from fastapi import status
-
 
 import sqlalchemy
-
-
-import logging
+from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -202,6 +199,263 @@ def _extract_json_object(raw: str) -> Any:
     except json.JSONDecodeError as e:
         logger.error("Model returned invalid JSON: %s; first_500=%r", e, trimmed[:500])
         raise HTTPException(status_code=502, detail="Vertex returned invalid JSON")
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    # Accept "YYYY-MM-DD" or full ISO timestamps by taking the date prefix.
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+
+def _parse_measurement_value(raw: str) -> tuple[Optional[Decimal], Optional[str]]:
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+
+    m = _NUM_RE.search(s)
+    if not m:
+        return None, s
+
+    num_token = m.group(0)
+    try:
+        num = Decimal(num_token)
+    except InvalidOperation:
+        return None, s
+
+    prefix = s[: m.start()].strip()
+    suffix = s[m.end() :].strip()
+    if prefix or suffix:
+        # Values like "<13.5" or "13.5 (H)" should remain human-readable in value_text.
+        return num, s
+
+    return num, None
+
+
+def _normalize_blob_path_candidates(blob_path: str) -> list[str]:
+    p = (blob_path or "").strip()
+    if not p:
+        return []
+
+    candidates: list[str] = []
+    for variant in {p, p.lstrip("/")}:
+        if variant and variant not in candidates:
+            candidates.append(variant)
+
+    return candidates
+
+
+def _mark_medical_record_processing(*, conn: sqlalchemy.Connection, blob_path: str) -> str:
+    candidates = _normalize_blob_path_candidates(blob_path)
+    if not candidates:
+        raise RuntimeError("Empty blob_path")
+
+    row = None
+    for cand in candidates:
+        row = conn.execute(
+            text(
+                """
+                UPDATE public.medical_records
+                SET status = 'PROCESSING',
+                    error = NULL,
+                    updated_at = NOW()
+                WHERE blob_path = :p
+                  AND status IN ('UPLOADING', 'PROCESSING', 'FAILED')
+                RETURNING id::text AS id
+                """
+            ),
+            {"p": cand},
+        ).mappings().first()
+        if row:
+            break
+
+        # Case-insensitive exact match fallback (helps if casing differs between GCS object name and DB text)
+        row = conn.execute(
+            text(
+                """
+                UPDATE public.medical_records
+                SET status = 'PROCESSING',
+                    error = NULL,
+                    updated_at = NOW()
+                WHERE blob_path ILIKE :p
+                  AND status IN ('UPLOADING', 'PROCESSING', 'FAILED')
+                RETURNING id::text AS id
+                """
+            ),
+            {"p": cand},
+        ).mappings().first()
+        if row:
+            break
+
+    if not row:
+        raise RuntimeError(f"No updatable medical_records row found for blob_path={blob_path!r}")
+
+    return str(row["id"])
+
+
+def _mark_medical_record_completed(
+    *,
+    conn: sqlalchemy.Connection,
+    record_id: str,
+    visit_date: Optional[date],
+) -> None:
+    conn.execute(
+        text(
+            """
+            UPDATE public.medical_records
+            SET status = 'COMPLETED',
+                error = NULL,
+                visit_date = COALESCE(:visit_date, visit_date),
+                updated_at = NOW()
+            WHERE id = CAST(:record_id AS uuid)
+            """
+        ),
+        {"record_id": record_id, "visit_date": visit_date},
+    )
+
+
+def _mark_medical_record_failed(*, conn: sqlalchemy.Connection, record_id: str, message: str) -> None:
+    # Keep message short; medical_records.error is text without a known max length, but logs/UX benefit from brevity.
+    err = (message or "Processing failed").strip()
+    if len(err) > 2000:
+        err = err[:2000] + "…"
+
+    conn.execute(
+        text(
+            """
+            UPDATE public.medical_records
+            SET status = 'FAILED',
+                error = :error,
+                updated_at = NOW()
+            WHERE id = CAST(:record_id AS uuid)
+            """
+        ),
+        {"record_id": record_id, "error": err},
+    )
+
+
+def _replace_lab_results(*, conn: sqlalchemy.Connection, record_id: str, structured: dict) -> int:
+    visit_date = _parse_iso_date(structured.get("visit_date"))
+
+    measurements = structured.get("measurements") or []
+    if not isinstance(measurements, list):
+        measurements = []
+
+    conn.execute(
+        text("DELETE FROM public.lab_results WHERE record_id = CAST(:record_id AS uuid)"),
+        {"record_id": record_id},
+    )
+
+    rows: list[dict[str, Any]] = []
+    for item in measurements:
+        if not isinstance(item, dict):
+            continue
+
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+
+        value_raw = item.get("value")
+        value_str = "" if value_raw is None else str(value_raw).strip()
+        unit = item.get("unit")
+        unit_str = None if unit is None else str(unit).strip()
+        if unit_str == "":
+            unit_str = None
+
+        value_num, value_text = _parse_measurement_value(value_str)
+
+        rows.append(
+            {
+                "record_id": record_id,
+                "metric_code": name,
+                "measured_date": visit_date,
+                "value_num": value_num,
+                "value_text": value_text,
+                "unit": unit_str,
+                "reference_range": None,
+            }
+        )
+
+    if not rows:
+        return 0
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO public.lab_results
+                (record_id, metric_code, measured_date, value_num, value_text, unit, reference_range)
+            VALUES
+                (CAST(:record_id AS uuid), :metric_code, :measured_date, :value_num, :value_text, :unit, :reference_range)
+            """
+        ),
+        rows,
+    )
+    return len(rows)
+
+
+def _persist_structured_data_to_db(*, blob_path: str, structured: dict) -> dict:
+    if db_pool is None:
+        raise RuntimeError("Database is not configured on this instance (missing db_pool).")
+
+    visit_date = _parse_iso_date(structured.get("visit_date"))
+
+    with db_pool.connect() as conn:
+        with conn.begin():
+            record_id = _mark_medical_record_processing(conn=conn, blob_path=blob_path)
+            inserted = _replace_lab_results(conn=conn, record_id=record_id, structured=structured)
+            _mark_medical_record_completed(conn=conn, record_id=record_id, visit_date=visit_date)
+
+    return {"medical_record_id": record_id, "lab_results_inserted": inserted}
+
+
+def _find_medical_record_id_by_blob_path(*, conn: sqlalchemy.Connection, blob_path: str) -> Optional[str]:
+    candidates = _normalize_blob_path_candidates(blob_path)
+    if not candidates:
+        return None
+
+    for cand in candidates:
+        row = conn.execute(
+            text(
+                """
+                SELECT id::text AS id
+                FROM public.medical_records
+                WHERE blob_path = :p
+                LIMIT 1
+                """
+            ),
+            {"p": cand},
+        ).mappings().first()
+        if row:
+            return str(row["id"])
+
+        row = conn.execute(
+            text(
+                """
+                SELECT id::text AS id
+                FROM public.medical_records
+                WHERE blob_path ILIKE :p
+                LIMIT 1
+                """
+            ),
+            {"p": cand},
+        ).mappings().first()
+        if row:
+            return str(row["id"])
+
+    return None
 
 
 def _extract_structured_data_with_vertex(raw_text: str) -> dict:
@@ -397,11 +651,34 @@ async def tasks_process(payload: dict):
         logger.exception("File processing failed for gs://%s/%s: %s", bucket, blob_path, e)
         raise HTTPException(status_code=500, detail="File processing failed")
 
-    # TODO: implement AI JSON structuring + DB updates with extracted text.
+    db_info: Optional[dict] = None
+    try:
+        db_info = _persist_structured_data_to_db(blob_path=blob_path, structured=structured_data)
+        logger.info(
+            "DB persist complete record_id=%s labs=%s messageId=%s",
+            (db_info or {}).get("medical_record_id"),
+            (db_info or {}).get("lab_results_inserted"),
+            pubsub_message_id,
+        )
+    except Exception as e:
+        logger.exception("DB persist failed for gs://%s/%s: %s", bucket, blob_path, e)
+        # Best-effort failure marking if we can identify the record without relying on an open txn.
+        try:
+            if db_pool is not None:
+                with db_pool.connect() as conn:
+                    with conn.begin():
+                        record_id = _find_medical_record_id_by_blob_path(conn=conn, blob_path=blob_path)
+                        if record_id:
+                            _mark_medical_record_failed(conn=conn, record_id=record_id, message=str(e))
+        except Exception:
+            logger.exception("Failed to mark medical_records FAILED for gs://%s/%s", bucket, blob_path)
+
+        raise HTTPException(status_code=500, detail="Database update failed")
 
     return {
         "status": "processed",
         "extraction_mode": extraction_mode,
         "text_length": len(parsed_text),
         "structured_data": structured_data,
+        "db": db_info,
     }
