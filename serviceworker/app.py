@@ -245,6 +245,30 @@ def _parse_measurement_value(raw: str) -> tuple[Optional[Decimal], Optional[str]
     return num, None
 
 
+_TRAILING_PAREN_RE = re.compile(r"\s*\(.*\)\s*$")
+
+# Maps normalized base tokens to their canonical metric code.
+_METRIC_ALIASES: dict[str, str] = {
+    "SGPT": "ALT",
+    "ALT/SGPT": "ALT",
+}
+
+
+def normalize_metric_code(name: str) -> str:
+    """Return a canonical metric key for *name*.
+
+    Rules applied in order:
+    1. Remove a trailing parenthetical expression, e.g. "ALT (SGPT)" -> "ALT".
+    2. Strip surrounding whitespace and normalize internal runs of whitespace.
+    3. Uppercase the result.
+    4. Apply the alias map for well-known synonyms, e.g. "SGPT" -> "ALT".
+    """
+    s = _TRAILING_PAREN_RE.sub("", name).strip()  # drop trailing parenthetical first
+    s = " ".join(s.split())                        # normalize remaining whitespace
+    s = s.upper()
+    return _METRIC_ALIASES.get(s, s)
+
+
 def _normalize_blob_path_candidates(blob_path: str) -> list[str]:
     p = (blob_path or "").strip()
     if not p:
@@ -381,6 +405,7 @@ def _replace_lab_results(*, conn: sqlalchemy.Connection, record_id: str, structu
             {
                 "record_id": record_id,
                 "metric_code": name,
+                "metric_canonical": normalize_metric_code(name),
                 "measured_date": visit_date,
                 "value_num": value_num,
                 "value_text": value_text,
@@ -396,9 +421,9 @@ def _replace_lab_results(*, conn: sqlalchemy.Connection, record_id: str, structu
         text(
             """
             INSERT INTO public.lab_results
-                (record_id, metric_code, measured_date, value_num, value_text, unit, reference_range)
+                (record_id, metric_code, metric_canonical, measured_date, value_num, value_text, unit, reference_range)
             VALUES
-                (CAST(:record_id AS uuid), :metric_code, :measured_date, :value_num, :value_text, :unit, :reference_range)
+                (CAST(:record_id AS uuid), :metric_code, :metric_canonical, :measured_date, :value_num, :value_text, :unit, :reference_range)
             """
         ),
         rows,

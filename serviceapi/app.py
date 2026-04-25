@@ -413,7 +413,7 @@ def get_pet_trends(
                 JOIN app_user u ON p.user_id = u.id
                 WHERE p.name = :pet_name
                   AND u.firebase_uid = :firebase_uid
-                  AND lr.metric_code = :metric
+                  AND COALESCE(lr.metric_canonical, lr.metric_code) = :metric
                 ORDER BY lr.measured_date ASC
             """)
 
