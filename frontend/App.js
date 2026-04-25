@@ -36,6 +36,9 @@ const SERVICE_API_ENDPOINT = "https://serviceapi-730158129642.europe-west1.run.a
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
+// NEW: helper sleep function for backoff polling
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [petName, setPetName] = useState('Guppy');
@@ -45,12 +48,13 @@ export default function App() {
   const [apiError, setApiError] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
 
-  // NEW: track last uploaded recordId so we can poll status
+  // track last uploaded recordId (optional; mainly useful for debugging/UX)
   const [activeRecordId, setActiveRecordId] = useState(null);
 
   // --- DEEP LINKING LOGIC ---
+  // Handle the case where the app was opened via a link from a closed state
+
   useEffect(() => {
-    // Handle the case where the app was opened via a link from a closed state
     const getInitialUrl = async () => {
       const initialUrl = await Linking.getInitialURL();
       if (initialUrl) handleDeepLink(initialUrl);
@@ -80,11 +84,12 @@ export default function App() {
   };
 
   // --- AUTHENTICATION & INITIAL FETCH ---
+  //We are using anonymous sign in that doesn't require actual login/password authentication for testing purposes at the moment
+  //Remove the below initAuth section when platform team finishes implementing firebase email/password login in their app.js like so: 
+  //import { signInWithEmailAndPassword } from "firebase/auth";
+  //await signInWithEmailAndPassword(auth, email, password);
   useEffect(() => {
-    //We are using anonymous sign in that doesn't require actual login/password authentication for testing purposes at the moment
-    //Remove the below initAuth section when platform team finishes implementing firebase email/password login in their app.js like so: 
-    //import { signInWithEmailAndPassword } from "firebase/auth";
-    //await signInWithEmailAndPassword(auth, email, password);
+    
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
@@ -94,7 +99,6 @@ export default function App() {
     };
     initAuth();
 
-      
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
@@ -105,8 +109,9 @@ export default function App() {
     return () => unsubscribeAuth();
   }, [petName]);
 
-  //FETCH CHART DATA LOGIC
+  // FETCH CHART DATA
   //API call to query chart data from database in our backend that will be visualized on our graphs
+  // NOTE: returns true only if it got non-empty trends
   const fetchChartData = async (targetPetName) => {
     try {
       const token = await user.getIdToken(); // Firebase ID token being sent to backend that firebase UID is being extracted from
@@ -116,9 +121,7 @@ export default function App() {
         `${SERVICE_API_ENDPOINT}/get-pet-trends?petName=${encodeURIComponent(effectivePetName)}`,
         {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`, 
-          },
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
 
@@ -132,14 +135,15 @@ export default function App() {
 
       setChartData(formattedData);
       setLoadingCharts(false);
-      return formattedData.length > 0; // only "done" if we actually got data
+
+      return formattedData.length > 0;
     } catch (error) {
       setLoadingCharts(false);
       return false;
     }
   };
 
-  // NEW: poll backend for record processing status
+  // Poll backend for record processing status
   const fetchRecordStatus = async (recordId) => {
     const token = await user.getIdToken();
     const resp = await fetch(
@@ -154,63 +158,48 @@ export default function App() {
       const txt = await resp.text();
       throw new Error(`Status check failed: ${txt}`);
     }
-    return resp.json(); // { recordId, status, error, updatedAt }
+    return resp.json();
   };
 
-  // UPDATED: smarter polling that waits for COMPLETED
-  const startPolling = (recordId) => {
-    let attempts = 0;
+  // NEW: Larger-budget status polling with backoff (replaces startPolling interval)
+  const waitForRecordCompletion = async (recordId, effectivePetName, options = {}) => {
+    const totalBudgetMs = options.totalBudgetMs ?? 180_000; // 3 minutes default
+    const backoffDelaysMs = options.backoffDelaysMs ?? [2000, 2000, 3000, 3000, 5000, 8000, 10000, 10000, 10000];
 
-    // Increase total wait time: 20 attempts * 3s = 60s
-    const maxAttempts = 20;
+    const start = Date.now();
+    let attempt = 0;
 
-    const interval = setInterval(async () => {
-      attempts++;
+    while (Date.now() - start < totalBudgetMs) {
+      attempt++;
+
+      const elapsedSec = Math.floor((Date.now() - start) / 1000);
+      setProcessingStatus(`AI Analyzing... ${elapsedSec}s`);
+
       try {
-        setProcessingStatus(`AI Analyzing... (${attempts}/${maxAttempts})`);
-
         const statusPayload = await fetchRecordStatus(recordId);
         const status = statusPayload.status;
 
         if (status === "FAILED") {
-          clearInterval(interval);
-          setUploading(false);
-          setProcessingStatus(null);
-          setApiError(statusPayload.error || "Processing failed");
-          return;
+          throw new Error(statusPayload.error || "Processing failed");
         }
 
         if (status === "COMPLETED") {
-          // now the lab_results rows should exist
-          const hasData = await fetchChartData(petName);
-
-          clearInterval(interval);
-          setUploading(false);
-          setProcessingStatus(null);
-
-          if (hasData && Platform.OS !== 'web') {
-            Alert.alert("Success", "Health trends have been updated!");
-          }
-          return;
+          // once completed, fetch trends once
+          const hasData = await fetchChartData(effectivePetName);
+          return { completed: true, hasData };
         }
-
-        // else: UPLOADING/PROCESSING -> keep polling
-        if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          setUploading(false);
-          setProcessingStatus(null);
-          setApiError("Timed out waiting for processing to finish.");
-        }
+        // else: UPLOADING/PROCESSING -> continue
       } catch (e) {
-        // transient errors: keep trying but stop at maxAttempts
-        if (attempts >= maxAttempts) {
-          clearInterval(interval);
-          setUploading(false);
-          setProcessingStatus(null);
-          setApiError(e.message);
+        if (Date.now() - start > totalBudgetMs - 10_000) {
+          throw e;
         }
       }
-    }, 3000);
+
+      const delay = backoffDelaysMs[Math.min(attempt - 1, backoffDelaysMs.length - 1)];
+      await sleep(delay);
+    }
+
+    return { completed: false, hasData: false };
   };
 
   // --- UPLOAD HANDLER ---
@@ -259,8 +248,6 @@ export default function App() {
       }
       
       const { signedUrl, recordId } = await urlResponse.json();
-
-      // NEW: keep recordId so polling targets the right record
       setActiveRecordId(recordId);
 
       setProcessingStatus("Uploading to Storage...");
@@ -281,8 +268,29 @@ export default function App() {
 
       if (!gcsResponse.ok) throw new Error("Cloud Storage upload failed.");
 
-      // UPDATED: poll status for this recordId
-      startPolling(recordId);
+      // NEW: Larger-budget polling (instead of startPolling(recordId))
+      setProcessingStatus("Upload complete. Waiting for analysis...");
+
+      const resultPoll = await waitForRecordCompletion(recordId, petName, {
+        totalBudgetMs: 180_000, // tweak to 120_000, 300_000, etc.
+      });
+
+      setUploading(false);
+      setProcessingStatus(null);
+
+      if (!resultPoll.completed) {
+        setApiError("Timed out waiting for processing to finish. Please try again in a moment.");
+        return;
+      }
+
+      if (!resultPoll.hasData) {
+        setApiError("Processing completed, but no chartable trends were found for this metric.");
+        return;
+      }
+
+      if (Platform.OS !== 'web') {
+        Alert.alert("Success", "Health trends have been updated!");
+      }
 
     } catch (error) {
       setApiError(error.message);
