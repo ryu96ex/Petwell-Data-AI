@@ -322,6 +322,9 @@ export default function App() {
             data={chartData}
             height={180}
             width={Dimensions.get('window').width - 80}
+            spacing={90}
+            initialSpacing={40}
+            endSpacing={40}
             color="#6366f1"
             thickness={4}
             dataPointsColor="#4338ca"
