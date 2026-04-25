@@ -353,6 +353,50 @@ def insert_meta_data(
         logger.exception("DB insert failed (user/pet/medical_record): %s", e)
         raise HTTPException(status_code=500, detail="DB insert failed")
 
+# -----------------------------
+# NEW: status endpoint
+# -----------------------------
+@app.get("/api/medical-record-status")
+def medical_record_status(
+    recordId: str = Query(...),
+    uid: str = Depends(verify_firebase_uid),
+):
+    """
+    Returns processing status for a single medical record (scoped to authenticated user).
+    """
+    try:
+        with db_pool.connect() as conn:
+            row = conn.execute(
+                sqlalchemy.text(
+                    """
+                    SELECT mr.status, mr.error, mr.updated_at
+                    FROM public.medical_records mr
+                    JOIN public.pets p ON mr.pet_id = p.id
+                    JOIN public.app_user u ON p.user_id = u.id
+                    WHERE mr.id = CAST(:record_id AS uuid)
+                      AND u.firebase_uid = :firebase_uid
+                    LIMIT 1
+                    """
+                ),
+                {"record_id": recordId, "firebase_uid": uid},
+            ).fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Medical record not found")
+
+        return {
+            "recordId": recordId,
+            "status": row[0],
+            "error": row[1],
+            "updatedAt": row[2].isoformat() if row[2] else None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("DB Fetch Error (medical-record-status): %s", e)
+        raise HTTPException(status_code=500, detail="Could not fetch medical record status")
+
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
     petName: str = Query(...), #required Query Parameter being passed in through API call
