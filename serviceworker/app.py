@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -656,22 +657,24 @@ async def tasks_process(payload: dict):
     try:
         if is_pdf:
             # Attempt parser-based extraction first; OCR only when text is insufficient.
-            parsed_text = _extract_text_with_pdf_reader(bucket=bucket, blob_path=blob_path, generation=generation)
+            parsed_text = await asyncio.to_thread(
+                _extract_text_with_pdf_reader, bucket=bucket, blob_path=blob_path, generation=generation
+            )
             extraction_mode = "pdf_parser"
 
             if _needs_ocr(parsed_text):
                 logger.info("PDF parser yielded insufficient text; running OCR for gs://%s/%s", bucket, blob_path)
                 task_id = hashlib.sha256(f"{bucket}/{blob_path}#{generation or ''}".encode("utf-8")).hexdigest()[:32]
-                parsed_text = _extract_text_with_vision_ocr(bucket=bucket, blob_path=blob_path, task_id=task_id)
+                parsed_text = await asyncio.to_thread(
+                    _extract_text_with_vision_ocr, bucket=bucket, blob_path=blob_path, task_id=task_id
+                )
                 extraction_mode = "ocr_pdf"
         else:
-            parsed_text = _extract_text_from_image_with_vision(
-                bucket=bucket,
-                blob_path=blob_path,
-                generation=generation,
+            parsed_text = await asyncio.to_thread(
+                _extract_text_from_image_with_vision, bucket=bucket, blob_path=blob_path, generation=generation
             )
             extraction_mode = "ocr_image"
-        
+
         # Fail explicitly when both parser and OCR produce no usable text
         if not parsed_text:
             raise HTTPException(status_code=422, detail="Failed to extract text from file")
@@ -684,8 +687,7 @@ async def tasks_process(payload: dict):
             pubsub_message_id,
         )
 
-        structured_data = _extract_structured_data_with_vertex(parsed_text)
-        #logger.info("Structured JSON data extracted with vertex ai=%s", structured_data)
+        structured_data = await asyncio.to_thread(_extract_structured_data_with_vertex, parsed_text)
         logger.info("Vertex extraction complete messageId=%s", pubsub_message_id)
     except HTTPException:
         raise
@@ -695,7 +697,7 @@ async def tasks_process(payload: dict):
 
     db_info: Optional[dict] = None
     try:
-        db_info = _persist_structured_data_to_db(blob_path=blob_path, structured=structured_data)
+        db_info = await asyncio.to_thread(_persist_structured_data_to_db, blob_path=blob_path, structured=structured_data)
         logger.info(
             "DB persist complete record_id=%s labs=%s messageId=%s",
             (db_info or {}).get("medical_record_id"),
@@ -704,7 +706,6 @@ async def tasks_process(payload: dict):
         )
     except Exception as e:
         logger.exception("DB persist failed for gs://%s/%s: %s", bucket, blob_path, e)
-        # Best-effort failure marking if we can identify the record without relying on an open txn.
         try:
             if db_pool is not None:
                 with db_pool.connect() as conn:
