@@ -97,6 +97,7 @@ if all([
 else:
     logger.warning("Database not configured; starting without db_pool.")
 
+_vertex_model: Optional[GenerativeModel] = None
 
 def _is_pdf_path(blob_path: str) -> bool:
     # worker only handles pdf uploads
@@ -482,17 +483,23 @@ def _find_medical_record_id_by_blob_path(*, conn: sqlalchemy.Connection, blob_pa
 
     return None
 
+def _get_vertex_model() -> GenerativeModel:
+    global _vertex_model
+    if _vertex_model is None:
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+        location = os.environ.get("VERTEX_LOCATION")
+        model_name = os.environ.get("VERTEX_MODEL")
+        if not project:
+            raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
+        vertexai.init(project=project, location=location)
+        _vertex_model = GenerativeModel(model_name)
+        logger.info("Vertex model initialized project=%s location=%s model=%s", project, location, model_name)
+    return _vertex_model
 
 def _extract_structured_data_with_vertex(raw_text: str) -> dict:
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-    location = os.environ.get("VERTEX_LOCATION")
-    model_name = os.environ.get("VERTEX_MODEL")
-    if not project:
-        raise RuntimeError("Missing GOOGLE_CLOUD_PROJECT or GCP_PROJECT for Vertex AI")
-    
-    vertexai.init(project=project, location=location)
-    logging.info("Vertex project=%s location=%s model_name=%r", project, location, model_name)
-    model = GenerativeModel(model_name)
+
+    model = _get_vertex_model()
+
     prompt = (
         "Extract structured medical-record data from the text and return JSON only.\n"
         "Required shape:\n"
@@ -514,7 +521,7 @@ def _extract_structured_data_with_vertex(raw_text: str) -> dict:
         prompt,
         generation_config=GenerationConfig(
             temperature=0.1,
-            max_output_tokens=8192,
+            max_output_tokens=8000,
             response_mime_type="application/json",
         ),
     )
