@@ -17,7 +17,7 @@ CMD exec gunicorn \
   --bind :$PORT \
   --workers 1 \
   --threads 1 \
-  --timeout 90 \
+  --timeout 600 \
   --max-requests 200 \
   --max-requests-jitter 50 \
   --access-logfile - \
