@@ -603,6 +603,16 @@ async def pubsub_push(request: Request):
 
     logger.info("Received: gs://%s/%s gen=%s messageId=%s", bucket, blob_path, generation, message_id)
 
+    MEDICAL_RECORD_PREFIX = "medical_records/"
+
+    if not blob_path.startswith(MEDICAL_RECORD_PREFIX):
+        logger.info("Ignoring non-medical-record path: gs://%s/%s", bucket, blob_path)
+        return {}
+    
+    if not (_is_pdf_path(blob_path) or _is_supported_image_path(blob_path)):
+        logger.info("Ignoring unsupported file type at pubsub layer: gs://%s/%s", bucket, blob_path)
+        return {}
+        
     try:
         task_name = enqueue_task(
             bucket=bucket,
