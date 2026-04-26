@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -48,6 +48,9 @@ export default function App() {
   const [apiError, setApiError] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
 
+   // NEW: simple "tooltip" state for hover/press point details
+  const [selectedPoint, setSelectedPoint] = useState(null);
+
   // track last uploaded recordId (optional; mainly useful for debugging/UX)
   const [activeRecordId, setActiveRecordId] = useState(null);
 
@@ -78,9 +81,14 @@ export default function App() {
 
     if (queryParams && queryParams.petName) {
       setPetName(queryParams.petName);
-      // Trigger a refresh for the new pet's data
-      fetchChartData(queryParams.petName);
+      if (user) {
+        fetchChartData(queryParams.petName);
+      } else {
+        // wait for onAuthStateChanged to set user, then it will fetch
+        setLoadingCharts(true);
+      }
     }
+  
   };
 
   // --- AUTHENTICATION & INITIAL FETCH ---
@@ -113,35 +121,52 @@ export default function App() {
   //API call to query chart data from database in our backend that will be visualized on our graphs
   // NOTE: returns true only if it got non-empty trends
   const fetchChartData = async (targetPetName) => {
-    try {
-      const token = await user.getIdToken(); // Firebase ID token being sent to backend that firebase UID is being extracted from
-      const effectivePetName = targetPetName || petName;
+  try {
+    if (!user) throw new Error("User not authenticated");
 
-      const response = await fetch(
-        `${SERVICE_API_ENDPOINT}/get-pet-trends?petName=${encodeURIComponent(effectivePetName)}`,
-        {
-          method: "GET",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+    const token = await user.getIdToken();
+    const effectivePetName = targetPetName || petName;
 
-      if (!response.ok) throw new Error("Failed to fetch trends");
+    const response = await fetch(
+      `${SERVICE_API_ENDPOINT}/get-pet-trends?petName=${encodeURIComponent(effectivePetName)}`,
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
 
-      const data = await response.json();
-      const formattedData = (data.trends || []).map(item => ({
-        value: item.value,
-        label: item.label
-      }));
-
-      setChartData(formattedData);
-      setLoadingCharts(false);
-
-      return formattedData.length > 0;
-    } catch (error) {
-      setLoadingCharts(false);
-      return false;
+    if (!response.ok) {
+      const txt = await response.text();
+      throw new Error(`Failed to fetch trends: ${txt}`);
     }
-  };
+
+    const data = await response.json();
+    console.log(data.trends)
+    console.log("get-pet-trends raw:", data);
+
+    const formattedData = (data.trends || []).map((item, idx) => {
+      const v = Number(item.value);
+      const label = item.label == null ? "" : String(item.label);
+
+      if (!Number.isFinite(v)) {
+        console.warn("Invalid chart value at", idx, item);
+      }
+      return { value: v, label };
+    }).filter(p => Number.isFinite(p.value) && p.label.length > 0);
+
+    console.log("chartData formatted:", formattedData);
+
+    setChartData(formattedData);
+    setLoadingCharts(false);
+
+    return formattedData.length > 0;
+  } catch (error) {
+    console.error("fetchChartData failed:", error);
+    setApiError(error.message);
+    setLoadingCharts(false);
+    return false;
+  }
+};
 
   // Poll backend for record processing status
   const fetchRecordStatus = async (recordId) => {
@@ -302,6 +327,27 @@ export default function App() {
     }
   };
 
+  // Render a custom tooltip for gifted-charts (shown on press; on web it will feel like hover)
+  const renderTooltip = (item, index) => {
+    // item: your data item (value/label/...)
+    // index: index in dataset
+    return (
+      <View style={styles.tooltip}>
+        <Text style={styles.tooltipTitle}>{item?.label ?? `Point ${index + 1}`}</Text>
+        <Text style={styles.tooltipValue}>{item?.value}</Text>
+      </View>
+    );
+  };
+
+  // Derive a padded max so the chart always has headroom
+  const maxVal = useMemo(() => {
+    if (!chartData || chartData.length === 0) return 100;
+    const raw = Math.max(...chartData.map((d) => d.value));
+    // Round up to a "nice" number with ~15% headroom
+    return Math.ceil((raw * 1.15) / 10) * 10;
+  }, [chartData]);
+
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
@@ -323,27 +369,102 @@ export default function App() {
       
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Medical Metrics</Text>
+
+        {/* Optional: show a "selected point" readout (nice on mobile where hover isn't a thing) */}
+        {selectedPoint && (
+          <View style={styles.selectedPointRow}>
+            <Text style={styles.selectedPointText}>
+              Selected: {selectedPoint.label} • {selectedPoint.value}
+            </Text>
+          </View>
+        )}
+
         {loadingCharts ? (
           <ActivityIndicator size="large" color="#6366f1" />
         ) : (
+          
           <LineChart
+            key={chartData.length}          // ← forces remount when point count changes
+            //maxValue={maxVal} 
             data={chartData}
-            height={180}
+            showDataPointText
+            dataPointTextColor="#111827"
+            dataPointTextShiftY={-10}
+
+            // Layout / spacing
+            height={200}
             width={Dimensions.get('window').width - 80}
             spacing={90}
-            initialSpacing={40}
-            endSpacing={40}
+            initialSpacing={60}
+            endSpacing={60}
+
+            // Line + points
             color="#6366f1"
-            thickness={4}
+            thickness={3}
             dataPointsColor="#4338ca"
-            curved
-            animateOnDataChange
-            animationDuration={1000}
-            noOfSections={3}
+            curved={chartData.length > 2}
+            dataPointsRadius={5}
+            dataPointsWidth={2}
+            dataPointsHeight={2}
+
+            // Make it feel more "premium"
+            areaChart
+            startFillColor="rgba(99, 102, 241, 0.25)"
+            endFillColor="rgba(99, 102, 241, 0.02)"
+            startOpacity={0.9}
+            endOpacity={0.05}
+
+            // Axes / grid
+            noOfSections={4}
             yAxisThickness={0}
             xAxisThickness={1}
-            xAxisColor="#cbd5e1"
-            hideRules
+            xAxisColor="#e2e8f0"
+            rulesType="solid"
+            rulesColor="#eef2ff"
+            yAxisTextStyle={{ color: '#94a3b8', fontSize: 11 }}
+            xAxisLabelTextStyle={{ color: '#94a3b8', fontSize: 11 }}
+
+            // Interaction (gifted-charts shows tooltip on press; on web pointer events often behave like hover)
+            pointerConfig={{
+              pointerStripUptoDataPoint: true,
+              pointerStripColor: 'rgba(99,102,241,0.25)',
+              pointerStripWidth: 2,
+
+              pointerColor: 'transparent',
+              radius: 0,
+
+              activatePointersOnLongPress: Platform.OS !== 'web',
+              autoAdjustPointerLabelPosition: true,
+
+              pointerLabelComponent: (items) => {
+                // items is an array; for single line chart use items[0]
+                const it = items?.[0];
+                if (!it) return null;
+                return (
+                  <View style={{
+                    minWidth: 160,          
+                    paddingVertical: 10,    
+                    paddingHorizontal: 12,
+                    borderRadius: 12,
+                    backgroundColor: '#0f172a',
+                  }}>
+                    <Text style={{ color: 'white', fontSize: 14, fontWeight: '700' }}>
+                      {it.label}
+                    </Text>
+                    <Text style={{ color: 'white', fontSize: 18, fontWeight: '800', marginTop: 4 }}>
+                      {it.value}
+                    </Text>
+                  </View>
+                );
+              },
+            }}
+
+            // Track which point was touched (better UX on mobile)
+            onPress={(item, index) => setSelectedPoint(item)}
+
+            // Existing behavior
+            isAnimated
+            hideRules={false}
           />
         )}
       </View>
@@ -385,7 +506,30 @@ const styles = StyleSheet.create({
   errorText: { color: '#b91c1c', fontSize: 13, fontWeight: '600', flex: 1 },
   errorClose: { color: '#b91c1c', marginLeft: 10, fontSize: 16, fontWeight: 'bold' },
   card: { backgroundColor: '#fff', borderRadius: 24, padding: 20, marginBottom: 20, shadowColor: '#6366f1', shadowOpacity: 0.1, shadowRadius: 20, elevation: 5 },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: '#64748b', marginBottom: 20 },
+  cardTitle: { fontSize: 16, fontWeight: '700', color: '#64748b', marginBottom: 12 },
+
+  selectedPointRow: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#c7d2fe',
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  selectedPointText: { color: '#3730a3', fontSize: 12, fontWeight: '700' },
+
+  tooltip: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  tooltipTitle: { color: '#cbd5e1', fontSize: 11, fontWeight: '700' },
+  tooltipValue: { color: '#ffffff', fontSize: 14, fontWeight: '900', marginTop: 2 },
+
   uploadSection: { backgroundColor: '#fff', borderRadius: 24, padding: 24, borderStyle: 'dashed', borderWidth: 2, borderColor: '#cbd5e1' },
   sectionLabel: { fontSize: 18, fontWeight: '800', color: '#1e293b', marginBottom: 8 },
   description: { fontSize: 14, color: '#64748b', marginBottom: 24, lineHeight: 20 },
