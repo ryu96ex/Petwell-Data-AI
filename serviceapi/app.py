@@ -429,6 +429,7 @@ def get_pet_trends(
                 "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
             }
             for row in rows
+            if row[1] is not None
         ]
 
         return {"petName": petName, "metric": metric, "trends": trends, "verified_uid": uid}
