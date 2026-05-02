@@ -428,8 +428,16 @@ def get_pet_trends(
             else:
                 query_str += " ORDER BY lr.measured_date ASC, metric ASC"
 
+            logger.info("Executing query for petName=%s metric=%s uid=%s", petName, metric, uid)
+            logger.debug("Query string: %s", query_str)
+            logger.debug("Query params: %s", params)
+            
             query = sqlalchemy.text(query_str)
             rows = conn.execute(query, params).fetchall()
+            
+            logger.info("Query returned %d rows for petName=%s metric=%s", len(rows), petName, metric)
+            if rows:
+                logger.debug("Sample rows: %s", rows[:3])  # Log first 3 rows as sample
 
         # Group by metric
         trends_by_metric = {}
@@ -443,20 +451,26 @@ def get_pet_trends(
                     "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
                 })
 
+        logger.info("Processed metrics: %s", list(trends_by_metric.keys()))
+        
         # If a specific metric was requested, return in old format
         if metric:
-            return {
+            result = {
                 "petName": petName,
                 "metric": metric,
                 "trends": trends_by_metric.get(metric, []),
                 "verified_uid": uid
             }
+            logger.info("Returning single metric response with %d trends", len(result["trends"]))
+            return result
         else:
-            return {
+            result = {
                 "petName": petName,
                 "trendsByMetric": trends_by_metric,
                 "verified_uid": uid
             }
+            logger.info("Returning multi-metric response with metrics: %s", list(trends_by_metric.keys()))
+            return result
 
     except Exception as e:
         logger.exception("DB Fetch Error: %s", e)
