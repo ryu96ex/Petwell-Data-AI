@@ -400,12 +400,13 @@ def medical_record_status(
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
     petName: str = Query(...),
-    metric: str = Query(default=None), #If no metric parameter is passed, make the metric default None
+    metric: str = Query(default=None),
     uid: str = Depends(verify_firebase_uid),
 ):
     try:
         with db_pool.connect() as conn:
-            query = sqlalchemy.text("""
+            # Build query string first
+            query_str = """
                 SELECT lr.measured_date, lr.value_num, COALESCE(lr.metric_canonical, lr.metric_code) as metric
                 FROM lab_results lr
                 JOIN medical_records mr ON lr.record_id = mr.id
@@ -413,32 +414,28 @@ def get_pet_trends(
                 JOIN app_user u ON p.user_id = u.id
                 WHERE p.name = :pet_name
                   AND u.firebase_uid = :firebase_uid
-            """)
+            """
             
             params = {
                 "pet_name": petName,
                 "firebase_uid": uid,
             }
             
-            # If metric is specified, filter to that metric. If no metric is specified select all metrics at once instead.
+            # If metric is specified, filter to that metric
             if metric:
-                query = sqlalchemy.text(str(query) + """
-                  AND COALESCE(lr.metric_canonical, lr.metric_code) = :metric
-                ORDER BY lr.measured_date ASC
-                """)
+                query_str += " AND COALESCE(lr.metric_canonical, lr.metric_code) = :metric ORDER BY lr.measured_date ASC"
                 params["metric"] = metric
             else:
-                query = sqlalchemy.text(str(query) + """
-                ORDER BY lr.measured_date ASC, metric ASC
-                """)
+                query_str += " ORDER BY lr.measured_date ASC, metric ASC"
 
+            query = sqlalchemy.text(query_str)
             rows = conn.execute(query, params).fetchall()
 
         # Group by metric
         trends_by_metric = {}
         for row in rows:
-            if row[1] is not None:  # Filter out nulls
-                metric_key = row[2]  # The metric column
+            if row[1] is not None:
+                metric_key = row[2]
                 if metric_key not in trends_by_metric:
                     trends_by_metric[metric_key] = []
                 trends_by_metric[metric_key].append({
@@ -446,7 +443,7 @@ def get_pet_trends(
                     "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
                 })
 
-        # If a specific metric was requested, return in old format for backward compatibility
+        # If a specific metric was requested, return in old format
         if metric:
             return {
                 "petName": petName,
@@ -455,7 +452,6 @@ def get_pet_trends(
                 "verified_uid": uid
             }
         else:
-            # Return all metrics
             return {
                 "petName": petName,
                 "trendsByMetric": trends_by_metric,
