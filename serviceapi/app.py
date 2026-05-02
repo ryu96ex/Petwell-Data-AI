@@ -399,40 +399,68 @@ def medical_record_status(
 
 @app.get("/api/get-pet-trends")
 def get_pet_trends(
-    petName: str = Query(...), #required Query Parameter being passed in through API call
-    metric: str = Query("ALT"), #using default metric value of ALT if caller doesn't specify
+    petName: str = Query(...),
+    metric: str = Query(default=None), #If no metric parameter is passed, make the metric default None
     uid: str = Depends(verify_firebase_uid),
 ):
     try:
         with db_pool.connect() as conn:
             query = sqlalchemy.text("""
-                SELECT lr.measured_date, lr.value_num
+                SELECT lr.measured_date, lr.value_num, COALESCE(lr.metric_canonical, lr.metric_code) as metric
                 FROM lab_results lr
                 JOIN medical_records mr ON lr.record_id = mr.id
                 JOIN pets p ON mr.pet_id = p.id
                 JOIN app_user u ON p.user_id = u.id
                 WHERE p.name = :pet_name
                   AND u.firebase_uid = :firebase_uid
+            """)
+            
+            params = {
+                "pet_name": petName,
+                "firebase_uid": uid,
+            }
+            
+            # If metric is specified, filter to that metric. If no metric is specified select all metrics at once instead.
+            if metric:
+                query = sqlalchemy.text(str(query) + """
                   AND COALESCE(lr.metric_canonical, lr.metric_code) = :metric
                 ORDER BY lr.measured_date ASC
-            """)
+                """)
+                params["metric"] = metric
+            else:
+                query = sqlalchemy.text(str(query) + """
+                ORDER BY lr.measured_date ASC, metric ASC
+                """)
 
-            rows = conn.execute(query, {
-                "pet_name": petName,
+            rows = conn.execute(query, params).fetchall()
+
+        # Group by metric
+        trends_by_metric = {}
+        for row in rows:
+            if row[1] is not None:  # Filter out nulls
+                metric_key = row[2]  # The metric column
+                if metric_key not in trends_by_metric:
+                    trends_by_metric[metric_key] = []
+                trends_by_metric[metric_key].append({
+                    "value": float(row[1]),
+                    "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
+                })
+
+        # If a specific metric was requested, return in old format for backward compatibility
+        if metric:
+            return {
+                "petName": petName,
                 "metric": metric,
-                "firebase_uid": uid,
-            }).fetchall()
-
-        trends = [
-            {
-                "value": float(row[1]),
-                "label": row[0].strftime("%b %d %Y") if isinstance(row[0], datetime.date) else str(row[0]),
+                "trends": trends_by_metric.get(metric, []),
+                "verified_uid": uid
             }
-            for row in rows
-            if row[1] is not None
-        ]
-
-        return {"petName": petName, "metric": metric, "trends": trends, "verified_uid": uid}
+        else:
+            # Return all metrics
+            return {
+                "petName": petName,
+                "trendsByMetric": trends_by_metric,
+                "verified_uid": uid
+            }
 
     except Exception as e:
         logger.exception("DB Fetch Error: %s", e)
