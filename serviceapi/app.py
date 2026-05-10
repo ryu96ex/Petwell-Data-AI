@@ -197,6 +197,8 @@ def get_signed_url(payload: SignedUrlRequest, authorization: Optional[str] = Hea
         blob_path=blob_path,
     )
 
+    logger.info("***Signed Upload Url=%s", url)
+
     return {
         "signedUrl": url,
         "gcsFilePath": blob_path,
@@ -340,7 +342,9 @@ def insert_meta_data(
             )
 
             db_conn.commit()
-
+        
+        logger.info("***Meta data inserted successfully for user_id=%s pet_id=%s medical_record_id=%s", user_id, pet_id, record_id)
+        
         return {
             "user_id": str(user_id),
             "pet_id": str(pet_id),
